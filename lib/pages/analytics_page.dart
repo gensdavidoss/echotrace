@@ -365,6 +365,68 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     return topRankings;
   }
 
+// ==================== 【新增代码开始：处理跳转逻辑】 ====================
+  
+  // 处理跳转逻辑
+  Future<void> _navigateToReport(int? year) async {
+    // 1. 关闭弹窗
+    Navigator.of(context).pop();
+
+    // 2. 显示加载状态
+    setState(() {
+      _isLoading = true;
+      _loadingStatus = '正在准备${year != null ? "$year年" : ""}年度报告...';
+    });
+
+    try {
+      // 3. 跳转页面
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => AnnualReportDisplayPage(
+            databaseService: widget.databaseService,
+            year: year,
+          ),
+        ),
+      );
+    } finally {
+      // 4. 恢复状态
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _loadingStatus = '';
+        });
+      }
+    }
+  }
+
+  // 显示年份选择弹窗
+  void _showYearSelectionDialog() {
+    final currentYear = DateTime.now().year;
+    final years = List.generate(10, (index) => currentYear - index);
+
+    showDialog(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('请选择报告年份'),
+        children: [
+          SimpleDialogOption(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+            onPressed: () => _navigateToReport(null),
+            child: const Text('📅 全部时间 (历史以来)', style: TextStyle(fontSize: 16)),
+          ),
+          const Divider(),
+          ...years.map((year) => SimpleDialogOption(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+            onPressed: () => _navigateToReport(year),
+            child: Text('$year年', style: const TextStyle(fontSize: 16)),
+          )),
+        ],
+      ),
+    );
+  }
+  // ==================== 【新增代码结束】 ====================
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -572,32 +634,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
       child: InkWell(
         onTap: _isLoading
             ? null
-            : () async {
-                // 显示加载状态
-                setState(() {
-                  _isLoading = true;
-                  _loadingStatus = '正在准备年度报告...';
-                });
-
-                try {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => AnnualReportDisplayPage(
-                        databaseService: widget.databaseService,
-                      ),
-                    ),
-                  );
-                } finally {
-                  // 隐藏加载状态
-                  if (mounted) {
-                    setState(() {
-                      _isLoading = false;
-                      _loadingStatus = '';
-                    });
-                  }
-                }
-              },
+            : () => _showYearSelectionDialog(),// 调用新的弹窗函数
         borderRadius: BorderRadius.circular(12),
         child: Container(
           padding: const EdgeInsets.all(16),
