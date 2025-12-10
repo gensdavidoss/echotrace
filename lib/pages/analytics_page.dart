@@ -163,12 +163,16 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
         ).showSnackBar(SnackBar(content: Text('加载数据失败: $e')));
       }
     } finally {
+      // 只要数据加载成功了，就算有哪些年份
+      if (_overallStats != null) {
+         _calculateAvailableYears();
+      }
+      // ========================================
       if (mounted) {
         setState(() => _isLoading = false);
       }
       await logger.debug('AnalyticsPage', '========== 数据加载完成 ==========');
     }
-  }
 // =============================【新增代码】================================
 // 计算有哪些年份可选
   void _calculateAvailableYears() {
@@ -247,8 +251,9 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     setState(() {
       _allContactRankings = rankings;
       _contactRankings = rankings.take(_topN).toList();
-      _loadingStatus = '完成';
-      // 【新增】
+      _loadingStatus = '完成（使用缓存数据）';
+      _isLoading = false;
+      // 【新增】计算有哪些年份
       _calculateAvailableYears();
     });
 
@@ -460,17 +465,15 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
 // ==================== 【新增代码开始：处理跳转逻辑】 ====================
   // 处理跳转逻辑
   Future<void> _navigateToReport(int? year) async {
-    // 1. 关闭弹窗
-    Navigator.of(context).pop();
-
-    // 2. 显示加载状态
+    
+    // 1. 显示加载状态
     setState(() {
       _isLoading = true;
       _loadingStatus = '正在准备${year != null ? "$year年" : ""}年度报告...';
     });
 
     try {
-      // 3. 跳转页面
+      // 2. 跳转页面
       await Navigator.push(
         context,
         MaterialPageRoute(
@@ -481,7 +484,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
         ),
       );
     } finally {
-      // 4. 恢复状态
+      // 3. 恢复状态
       if (mounted) {
         setState(() {
           _isLoading = false;
