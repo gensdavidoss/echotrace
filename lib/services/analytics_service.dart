@@ -250,7 +250,7 @@ class AnalyticsService {
 
 // ==================== 【新增代码开始：年份筛选专用逻辑】 ====================
   
-  /// 分析指定年份的私聊统计 (新增：为了支持按年份筛选)
+  /// 分析指定年份的私聊统计 (新增：支持按年份筛选)
   Future<ChatStatistics> analyzeYearlyPrivateChats(int year) async {
     await logger.debug('AnalyticsService', '========== 开始分析 $year 年私聊统计 ==========');
 
@@ -274,11 +274,19 @@ class AnalyticsService {
     DateTime? firstMessageTime;
     DateTime? lastMessageTime;
     
-    // 用于统计活跃天数 (简单去重 yyyy-mm-dd)
+    // 用于统计活跃天数
     final activeDates = <String>{};
 
+    int processedCount = 0;
+
     for (final session in privateSessions) {
-      // 复用已有的方法，只获取该时间段内的消息
+      // --- 防卡死关键点：每处理 20 个会话，暂停 0 毫秒让出 CPU 给 UI 线程 ---
+      processedCount++;
+      if (processedCount % 20 == 0) {
+        await Future.delayed(Duration.zero);
+      }
+      // -----------------------------------------------------------
+
       final messages = await getMessagesByDateRange(
         session.username,
         startTime,
@@ -390,8 +398,8 @@ class AnalyticsService {
       allMessages.addAll(batch);
       offset += batchSize;
 
-      // 安全限制：最多加载10万条消息
-      if (offset >= 100000) break;
+      // 安全限制：最多加载100万条消息
+      if (offset >= 1000000) break;
     }
 
     return allMessages;

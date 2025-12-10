@@ -24,8 +24,12 @@ class AnalyticsPage extends StatefulWidget {
 class _AnalyticsPageState extends State<AnalyticsPage> {
   late AnalyticsService _analyticsService;
   bool _isLoading = false;
+  
+  // ==================== 【新增：年份筛选状态】 ====================
   int? _selectedYear; // 当前选中的年份 (null 代表全部)
-  List<int> _availableYears = []; // 可选的年份列表 (后面UI会用到)
+  List<int> _availableYears = []; // 可选的年份列表
+  // ==========================================================
+
   ChatStatistics? _overallStats;
   List<ContactRanking>? _contactRankings;
   List<ContactRanking>? _allContactRankings; // 保存所有排名
@@ -130,31 +134,29 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
               '使用缓存数据完成，总消息数: ${_overallStats?.totalMessages}',
             );
           }
-          return;
+        } else {
+          // 数据库未变化，直接使用缓存
+          await logger.info('AnalyticsPage', '数据库未变化，使用缓存数据');
+          if (!mounted) return;
+          setState(() {
+            _overallStats = cachedData['overallStats'];
+            _allContactRankings = cachedData['contactRankings'];
+            _contactRankings = _allContactRankings?.take(_topN).toList();
+            _loadingStatus = '完成（从缓存加载）';
+            _isLoading = false;
+          });
+          await logger.debug(
+            'AnalyticsPage',
+            '缓存加载完成，总消息数: ${_overallStats?.totalMessages}, 联系人数: ${_allContactRankings?.length}',
+          );
         }
-
-        // 数据库未变化，直接使用缓存
-        await logger.info('AnalyticsPage', '数据库未变化，使用缓存数据');
-        if (!mounted) return;
-        setState(() {
-          _overallStats = cachedData['overallStats'];
-          _allContactRankings = cachedData['contactRankings'];
-          _contactRankings = _allContactRankings?.take(_topN).toList();
-          _loadingStatus = '完成（从缓存加载）';
-          _isLoading = false;
-        });
-        await logger.debug(
-          'AnalyticsPage',
-          '缓存加载完成，总消息数: ${_overallStats?.totalMessages}, 联系人数: ${_allContactRankings?.length}',
+      } else {
+        // 没有缓存，重新分析
+        await logger.info('AnalyticsPage', '没有缓存，开始重新分析');
+        await _performAnalysis(
+          dbModifiedTime ?? DateTime.now().millisecondsSinceEpoch,
         );
-        return;
       }
-
-      // 没有缓存，重新分析
-      await logger.info('AnalyticsPage', '没有缓存，开始重新分析');
-      await _performAnalysis(
-        dbModifiedTime ?? DateTime.now().millisecondsSinceEpoch,
-      );
     } catch (e, stackTrace) {
       await logger.error('AnalyticsPage', '加载数据失败: $e', e, stackTrace);
       if (mounted) {
@@ -167,14 +169,14 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
       if (_overallStats != null) {
          _calculateAvailableYears();
       }
-      // ========================================
       if (mounted) {
         setState(() => _isLoading = false);
       }
       await logger.debug('AnalyticsPage', '========== 数据加载完成 ==========');
     }
-// =============================【新增代码】================================
-// 计算有哪些年份可选
+  }
+
+  // 计算有哪些年份可选
   void _calculateAvailableYears() {
     final currentYear = DateTime.now().year;
     int startYear = currentYear;
@@ -187,10 +189,13 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     if (startYear > currentYear) startYear = currentYear;
 
     // 生成年份列表 (从今年倒推到最早年份)
-    _availableYears.clear();
+    final years = <int>[];
     for (int y = currentYear; y >= startYear; y--) {
-      _availableYears.add(y);
+      years.add(y);
     }
+    setState(() {
+      _availableYears = years;
+    });
   }
 
   Future<void> _performAnalysis(int dbModifiedTime) async {
@@ -198,34 +203,27 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     final cacheService = AnalyticsCacheService.instance;
 
     if (!mounted) return;
-    setState(() => _loadingStatus = '正在分析所有私聊数据...');
+    setState(() => _loadingStatus = '正在分析私聊数据...');
 
-   // ==================== 【修改开始：智能分流逻辑】 ====================
     await logger.debug('AnalyticsPage', '开始分析数据, 年份: $_selectedYear');
     final startTime = DateTime.now();
     
+    // ==================== 【核心逻辑修改】 ====================
     ChatStatistics stats;
-    
     if (_selectedYear == null) {
-      // 1. 如果没选年份，用旧的快速逻辑（查所有）
+      // 1. 全部年份 (调用旧逻辑)
       stats = await _analyticsService.analyzeAllPrivateChats();
     } else {
-      // 2. 如果选了年份，用刚才在 Service 里写的新逻辑（查特定年份）
-      // 注意：这里需要确保你在 analytics_service.dart 里已经加了 analyzeYearlyPrivateChats 函数
+      // 2. 指定年份 (调用新逻辑)
       stats = await _analyticsService.analyzeYearlyPrivateChats(_selectedYear!);
     }
-    // ==================== 【修改结束】 ====================
+    // ======================================================
+
     final elapsed = DateTime.now().difference(startTime);
 
     await logger.info('AnalyticsPage', '私聊数据分析完成，耗时: ${elapsed.inSeconds}秒');
+    // ...日志代码保留...
     await logger.debug('AnalyticsPage', '总消息数: ${stats.totalMessages}');
-    await logger.debug('AnalyticsPage', '活跃天数: ${stats.activeDays}');
-    await logger.debug('AnalyticsPage', '文本消息: ${stats.textMessages}');
-    await logger.debug('AnalyticsPage', '图片消息: ${stats.imageMessages}');
-    await logger.debug('AnalyticsPage', '语音消息: ${stats.voiceMessages}');
-    await logger.debug('AnalyticsPage', '视频消息: ${stats.videoMessages}');
-    await logger.debug('AnalyticsPage', '发送消息: ${stats.sentMessages}');
-    await logger.debug('AnalyticsPage', '接收消息: ${stats.receivedMessages}');
 
     if (!mounted) return;
     setState(() {
@@ -238,23 +236,25 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     final rankings = await _loadRankingsWithProgress();
     await logger.info('AnalyticsPage', '联系人排名加载完成，共 ${rankings.length} 个联系人');
 
-    // 保存到缓存
-    await logger.debug('AnalyticsPage', '开始保存缓存');
-    await cacheService.saveBasicAnalytics(
-      overallStats: _overallStats,
-      contactRankings: rankings,
-      dbModifiedTime: dbModifiedTime,
-    );
-    await logger.debug('AnalyticsPage', '缓存保存完成');
+    // 只有在查看“全部”时才保存全局缓存，避免单年数据覆盖全局缓存
+    if (_selectedYear == null) {
+      await logger.debug('AnalyticsPage', '开始保存缓存');
+      await cacheService.saveBasicAnalytics(
+        overallStats: _overallStats,
+        contactRankings: rankings,
+        dbModifiedTime: dbModifiedTime,
+      );
+      await logger.debug('AnalyticsPage', '缓存保存完成');
+    }
 
     if (!mounted) return;
     setState(() {
       _allContactRankings = rankings;
       _contactRankings = rankings.take(_topN).toList();
-      _loadingStatus = '完成（使用缓存数据）';
+      _loadingStatus = '完成'; // 简化文案
       _isLoading = false;
-      // 【新增】计算有哪些年份
-      _calculateAvailableYears();
+      // 重新计算年份以防万一
+      if (_availableYears.isEmpty) _calculateAvailableYears();
     });
 
     await logger.debug('AnalyticsPage', '========== 数据分析执行完成 ==========');
@@ -337,6 +337,10 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
           '已处理 ${i + 1}/${privateSessions.length} 个联系人',
         );
       }
+      // 防卡死微小延时
+      if ((i + 1) % 20 == 0) {
+        await Future.delayed(Duration.zero);
+      }
 
       try {
         // 使用SQL直接统计，不加载所有消息
@@ -389,156 +393,11 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     final topRankings = rankings.take(50).toList();
 
     await logger.info('AnalyticsPage', '联系人排名完成，返回前 ${topRankings.length} 名');
-    if (topRankings.isNotEmpty) {
-      await logger.debug(
-        'AnalyticsPage',
-        '第1名: ${topRankings[0].displayName}, 消息数: ${topRankings[0].messageCount}',
-      );
-      if (topRankings.length >= 10) {
-        await logger.debug(
-          'AnalyticsPage',
-          '第10名: ${topRankings[9].displayName}, 消息数: ${topRankings[9].messageCount}',
-        );
-      }
-    }
 
     return topRankings;
   }
 
-// 构建年份选择器 (横向滚动的胶囊条)
-  Widget _buildYearSelector() {
-    // 如果没有数据或只有今年一年，就不显示选择条了，省空间
-    if (_availableYears.isEmpty) return const SizedBox.shrink();
-
-    return Container(
-      height: 40, // 高度
-      margin: const EdgeInsets.only(bottom: 16),
-      child: ListView(
-        scrollDirection: Axis.horizontal, // 横向滚动
-        children: [
-          // 1. "全部年份" 选项
-          _buildYearChip(null, '全部年份'),
-          // 2. 具体年份选项
-          ..._availableYears.map((year) => _buildYearChip(year, '$year年')),
-        ],
-      ),
-    );
-  }
-
-  // 单个胶囊按钮
-  Widget _buildYearChip(int? year, String label) {
-    final isSelected = _selectedYear == year;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: ChoiceChip(
-        label: Text(label),
-        selected: isSelected,
-        onSelected: (selected) {
-          if (selected) {
-            setState(() {
-              _selectedYear = year;
-              // 核心：点击后触发重新分析！
-              // 使用当前时间戳作为 fake dbModifiedTime 触发刷新
-              _performAnalysis(DateTime.now().millisecondsSinceEpoch);
-            });
-          }
-        },
-        selectedColor: const Color(0xFF07C160),
-        backgroundColor: Colors.grey[100],
-        labelStyle: TextStyle(
-          color: isSelected ? Colors.white : Colors.black87,
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-          fontSize: 13,
-        ),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: BorderSide(
-            color: isSelected ? const Color(0xFF07C160) : Colors.transparent,
-            width: 1,
-          ),
-        ),
-        showCheckmark: false,
-      ),
-    );
-  }
-
-// ==================== 【新增代码开始：处理跳转逻辑】 ====================
-  // 处理跳转逻辑
-  Future<void> _navigateToReport(int? year) async {
-    
-    // 1. 显示加载状态
-    setState(() {
-      _isLoading = true;
-      _loadingStatus = '正在准备${year != null ? "$year年" : ""}年度报告...';
-    });
-
-    try {
-      // 2. 跳转页面
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => AnnualReportDisplayPage(
-            databaseService: widget.databaseService,
-            year: year,
-          ),
-        ),
-      );
-    } finally {
-      // 3. 恢复状态
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-          _loadingStatus = '';
-        });
-      }
-    }
-  }
-
-  // 显示年份选择弹窗（识别最早年份）
-  void _showYearSelectionDialog() {
-    final currentYear = DateTime.now().year;
-    int startYear = currentYear;
-
-    // 1. 尝试从统计数据中获取最早年份
-    // _overallStats 是页面加载时就已经算好的总数据
-    if (_overallStats != null && _overallStats!.firstMessageTime != null) {
-      startYear = _overallStats!.firstMessageTime!.year;
-    } else {
-      // 如果还没统计出来（极少情况），默认只显示最近 1 年
-      startYear = currentYear; 
-    }
-
-    // 安全检查：防止时间穿越（比如系统时间错了导致 startYear > currentYear）
-    if (startYear > currentYear) startYear = currentYear;
-
-    // 2. 动态生成年份列表 (从今年倒推到最早年份)
-    final years = <int>[];
-    for (int y = currentYear; y >= startYear; y--) {
-      years.add(y);
-    }
-
-    showDialog(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('请选择报告年份'),
-        children: [
-          SimpleDialogOption(
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
-            onPressed: () => _navigateToReport(null),
-            child: const Text('📅 全部时间 (历史以来)', style: TextStyle(fontSize: 16)),
-          ),
-          const Divider(),
-          // 3. 循环显示我们动态生成的年份
-          ...years.map((year) => SimpleDialogOption(
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
-            onPressed: () => _navigateToReport(year),
-            child: Text('$year年', style: const TextStyle(fontSize: 16)),
-          )),
-        ],
-      ),
-    );
-  }
-  // ==================== 【新增代码结束】 ====================
+  // ==================== UI 构建部分 ====================
 
   @override
   Widget build(BuildContext context) {
@@ -600,7 +459,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     );
   }
 
-  /// 构建加载视图（带详细进度）
+  /// 构建加载视图（带详细进度 - 保持原样）
   Widget _buildLoadingView() {
     return Center(
       child: ConstrainedBox(
@@ -716,33 +575,105 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     );
   }
 
- Widget _buildContent() {
+  Widget _buildContent() {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // 【新增：年份选择器】
+        // 1. 年份选择器
         _buildYearSelector(),
-
-        // 年度报告入口（置顶）
+        
+        // 2. 年度报告入口
         _buildAnnualReportEntry(),
         const SizedBox(height: 16),
 
+        // 3. 统计图表 (会随年份变化)
         _buildOverallStatsCard(),
         const SizedBox(height: 16),
         _buildMessageTypeChart(),
         const SizedBox(height: 16),
+        
+        // 4. 发送接收比例
         _buildSendReceiveChart(),
         const SizedBox(height: 16),
+        
+        // 5. 联系人排名
         _buildContactRankingCard(),
       ],
+    );
+  }
+
+  /// 构建年份选择器 (横向滚动的胶囊条)
+  Widget _buildYearSelector() {
+    if (_availableYears.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      height: 40,
+      margin: const EdgeInsets.only(bottom: 16),
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          _buildYearChip(null, '全部年份'),
+          ..._availableYears.map((year) => _buildYearChip(year, '$year年')),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildYearChip(int? year, String label) {
+    final isSelected = _selectedYear == year;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: ChoiceChip(
+        label: Text(label),
+        selected: isSelected,
+        onSelected: (selected) {
+          if (selected && _selectedYear != year) {
+            setState(() {
+              _selectedYear = year;
+              // 关键：点击后触发重新分析
+              // 使用当前时间戳触发刷新
+              _performAnalysis(DateTime.now().millisecondsSinceEpoch);
+            });
+          }
+        },
+        selectedColor: const Color(0xFF07C160),
+        backgroundColor: Colors.grey[100],
+        labelStyle: TextStyle(
+          color: isSelected ? Colors.white : Colors.black87,
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          fontSize: 13,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(
+            color: isSelected ? const Color(0xFF07C160) : Colors.transparent,
+            width: 1,
+          ),
+        ),
+        showCheckmark: false,
+      ),
+    );
+  }
+
+  /// 处理跳转逻辑 (修复卡死问题)
+  Future<void> _navigateToReport(int? year) async {
+    if (_isLoading) return;
+    
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AnnualReportDisplayPage(
+          databaseService: widget.databaseService,
+          year: year,
+        ),
+      ),
     );
   }
 
   /// 年度报告入口卡片
   Widget _buildAnnualReportEntry() {
     const wechatGreen = Color(0xFF07C160);
-    
-    // 【动态标题】
+    // 动态标题
     final title = _selectedYear == null 
         ? '查看详细年度报告 (历史以来)' 
         : '查看 $_selectedYear 年度报告';
@@ -753,10 +684,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
         side: const BorderSide(color: wechatGreen, width: 1),
       ),
       child: InkWell(
-        // 【直接跳转，不再弹窗】
-        onTap: _isLoading
-            ? null
-            : () => _navigateToReport(_selectedYear),
+        onTap: () => _navigateToReport(_selectedYear),
         borderRadius: BorderRadius.circular(12),
         child: Container(
           padding: const EdgeInsets.all(16),
@@ -768,7 +696,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      title, // 使用动态标题
+                      title,
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
@@ -783,20 +711,11 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
                   ],
                 ),
               ),
-              _isLoading
-                  ? const SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(wechatGreen),
-                      ),
-                    )
-                  : const Icon(
-                      Icons.chevron_right,
-                      color: Colors.grey,
-                      size: 24,
-                    ),
+              const Icon(
+                Icons.chevron_right,
+                color: Colors.grey,
+                size: 24,
+              ),
             ],
           ),
         ),
@@ -814,9 +733,9 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              '私聊总体统计',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            Text(
+              _selectedYear == null ? '私聊总体统计' : '$_selectedYear 年私聊统计',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
             _buildStatRow('总消息数', stats.totalMessages.toString()),
@@ -825,6 +744,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
               '平均每天',
               stats.averageMessagesPerDay.toStringAsFixed(1),
             ),
+            // 年份筛选下显示聊天时长意义不大，或者显示“跨度”，这里保持原样
             _buildStatRow('聊天时长', '${stats.chatDurationDays} 天'),
             if (stats.firstMessageTime != null)
               _buildStatRow('首条消息', _formatDateTime(stats.firstMessageTime!)),
@@ -1054,6 +974,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
   }
 }
 
+// 独立的类，完全还原原版样式
 class _AvatarWithRank extends StatelessWidget {
   final String? avatarUrl;
   final int rank;
