@@ -293,11 +293,11 @@ class AnalyticsService {
         // 统计类型
         if (msg.isTextMessage) {
           textMessages++;
-        } else if (msg.type == 3 || msg.type == 47) { // 图片/表情
+        } else if (msg.localType == 3 || msg.localType == 47) { 
           imageMessages++;
-        } else if (msg.type == 34) { // 语音
+        } else if (msg.localType == 34) { 
           voiceMessages++;
-        } else if (msg.type == 43 || msg.type == 62) { // 视频
+        } else if (msg.localType == 43 || msg.localType == 62) { 
           videoMessages++;
         } else {
           otherMessages++;
