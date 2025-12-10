@@ -24,6 +24,8 @@ class AnalyticsPage extends StatefulWidget {
 class _AnalyticsPageState extends State<AnalyticsPage> {
   late AnalyticsService _analyticsService;
   bool _isLoading = false;
+  int? _selectedYear; // 当前选中的年份 (null 代表全部)
+  List<int> _availableYears = []; // 可选的年份列表 (后面UI会用到)
   ChatStatistics? _overallStats;
   List<ContactRanking>? _contactRankings;
   List<ContactRanking>? _allContactRankings; // 保存所有排名
@@ -167,6 +169,25 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
       await logger.debug('AnalyticsPage', '========== 数据加载完成 ==========');
     }
   }
+// =============================【新增代码】================================
+// 计算有哪些年份可选
+  void _calculateAvailableYears() {
+    final currentYear = DateTime.now().year;
+    int startYear = currentYear;
+
+    // 尝试从统计数据中获取最早年份
+    if (_overallStats != null && _overallStats!.firstMessageTime != null) {
+      startYear = _overallStats!.firstMessageTime!.year;
+    }
+
+    if (startYear > currentYear) startYear = currentYear;
+
+    // 生成年份列表 (从今年倒推到最早年份)
+    _availableYears.clear();
+    for (int y = currentYear; y >= startYear; y--) {
+      _availableYears.add(y);
+    }
+  }
 
   Future<void> _performAnalysis(int dbModifiedTime) async {
     await logger.debug('AnalyticsPage', '========== 开始执行数据分析 ==========');
@@ -175,9 +196,21 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     if (!mounted) return;
     setState(() => _loadingStatus = '正在分析所有私聊数据...');
 
-    await logger.debug('AnalyticsPage', '开始分析所有私聊数据');
+   // ==================== 【修改开始：智能分流逻辑】 ====================
+    await logger.debug('AnalyticsPage', '开始分析数据, 年份: $_selectedYear');
     final startTime = DateTime.now();
-    final stats = await _analyticsService.analyzeAllPrivateChats();
+    
+    ChatStatistics stats;
+    
+    if (_selectedYear == null) {
+      // 1. 如果没选年份，用旧的快速逻辑（查所有）
+      stats = await _analyticsService.analyzeAllPrivateChats();
+    } else {
+      // 2. 如果选了年份，用刚才在 Service 里写的新逻辑（查特定年份）
+      // 注意：这里需要确保你在 analytics_service.dart 里已经加了 analyzeYearlyPrivateChats 函数
+      stats = await _analyticsService.analyzeYearlyPrivateChats(_selectedYear!);
+    }
+    // ==================== 【修改结束】 ====================
     final elapsed = DateTime.now().difference(startTime);
 
     await logger.info('AnalyticsPage', '私聊数据分析完成，耗时: ${elapsed.inSeconds}秒');
@@ -215,6 +248,8 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
       _allContactRankings = rankings;
       _contactRankings = rankings.take(_topN).toList();
       _loadingStatus = '完成';
+      // 【新增】
+      _calculateAvailableYears();
     });
 
     await logger.debug('AnalyticsPage', '========== 数据分析执行完成 ==========');
@@ -365,8 +400,64 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     return topRankings;
   }
 
+// 构建年份选择器 (横向滚动的胶囊条)
+  Widget _buildYearSelector() {
+    // 如果没有数据或只有今年一年，就不显示选择条了，省空间
+    if (_availableYears.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      height: 40, // 高度
+      margin: const EdgeInsets.only(bottom: 16),
+      child: ListView(
+        scrollDirection: Axis.horizontal, // 横向滚动
+        children: [
+          // 1. "全部年份" 选项
+          _buildYearChip(null, '全部年份'),
+          // 2. 具体年份选项
+          ..._availableYears.map((year) => _buildYearChip(year, '$year年')),
+        ],
+      ),
+    );
+  }
+
+  // 单个胶囊按钮
+  Widget _buildYearChip(int? year, String label) {
+    final isSelected = _selectedYear == year;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: ChoiceChip(
+        label: Text(label),
+        selected: isSelected,
+        onSelected: (selected) {
+          if (selected) {
+            setState(() {
+              _selectedYear = year;
+              // 核心：点击后触发重新分析！
+              // 使用当前时间戳作为 fake dbModifiedTime 触发刷新
+              _performAnalysis(DateTime.now().millisecondsSinceEpoch);
+            });
+          }
+        },
+        selectedColor: const Color(0xFF07C160),
+        backgroundColor: Colors.grey[100],
+        labelStyle: TextStyle(
+          color: isSelected ? Colors.white : Colors.black87,
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          fontSize: 13,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(
+            color: isSelected ? const Color(0xFF07C160) : Colors.transparent,
+            width: 1,
+          ),
+        ),
+        showCheckmark: false,
+      ),
+    );
+  }
+
 // ==================== 【新增代码开始：处理跳转逻辑】 ====================
-  
   // 处理跳转逻辑
   Future<void> _navigateToReport(int? year) async {
     // 1. 关闭弹窗
@@ -622,10 +713,13 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     );
   }
 
-  Widget _buildContent() {
+ Widget _buildContent() {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // 【新增：年份选择器】
+        _buildYearSelector(),
+
         // 年度报告入口（置顶）
         _buildAnnualReportEntry(),
         const SizedBox(height: 16),
@@ -644,6 +738,11 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
   /// 年度报告入口卡片
   Widget _buildAnnualReportEntry() {
     const wechatGreen = Color(0xFF07C160);
+    
+    // 【动态标题】
+    final title = _selectedYear == null 
+        ? '查看详细年度报告 (历史以来)' 
+        : '查看 $_selectedYear 年度报告';
 
     return Card(
       shape: RoundedRectangleBorder(
@@ -651,9 +750,10 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
         side: const BorderSide(color: wechatGreen, width: 1),
       ),
       child: InkWell(
+        // 【直接跳转，不再弹窗】
         onTap: _isLoading
             ? null
-            : () => _showYearSelectionDialog(),// 调用新的弹窗函数
+            : () => _navigateToReport(_selectedYear),
         borderRadius: BorderRadius.circular(12),
         child: Container(
           padding: const EdgeInsets.all(16),
@@ -665,7 +765,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '查看详细年度报告',
+                      title, // 使用动态标题
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),

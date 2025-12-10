@@ -248,6 +248,100 @@ class AnalyticsService {
     );
   }
 
+// ==================== 【新增代码开始：年份筛选专用逻辑】 ====================
+  
+  /// 分析指定年份的私聊统计 (新增：为了支持按年份筛选)
+  Future<ChatStatistics> analyzeYearlyPrivateChats(int year) async {
+    await logger.debug('AnalyticsService', '========== 开始分析 $year 年私聊统计 ==========');
+
+    // 1. 获取所有私聊会话
+    final sessions = await _databaseService.getSessions();
+    final privateSessions = sessions.where((s) => !s.isGroup).toList();
+
+    // 2. 定义该年份的起止时间
+    final startTime = DateTime(year, 1, 1);
+    final endTime = DateTime(year, 12, 31, 23, 59, 59);
+
+    // 3. 累加统计结果
+    int totalMessages = 0;
+    int textMessages = 0;
+    int imageMessages = 0;
+    int voiceMessages = 0;
+    int videoMessages = 0;
+    int otherMessages = 0;
+    int sentMessages = 0;
+    int receivedMessages = 0;
+    DateTime? firstMessageTime;
+    DateTime? lastMessageTime;
+    
+    // 用于统计活跃天数 (简单去重 yyyy-mm-dd)
+    final activeDates = <String>{};
+
+    for (final session in privateSessions) {
+      // 复用已有的方法，只获取该时间段内的消息
+      final messages = await getMessagesByDateRange(
+        session.username,
+        startTime,
+        endTime,
+      );
+
+      if (messages.isEmpty) continue;
+
+      totalMessages += messages.length;
+
+      for (final msg in messages) {
+        // 统计类型
+        if (msg.isTextMessage) {
+          textMessages++;
+        } else if (msg.type == 3 || msg.type == 47) { // 图片/表情
+          imageMessages++;
+        } else if (msg.type == 34) { // 语音
+          voiceMessages++;
+        } else if (msg.type == 43 || msg.type == 62) { // 视频
+          videoMessages++;
+        } else {
+          otherMessages++;
+        }
+
+        // 统计收发
+        if (msg.isSend == 1) {
+          sentMessages++;
+        } else {
+          receivedMessages++;
+        }
+
+        // 统计时间范围
+        final msgTime = DateTime.fromMillisecondsSinceEpoch(msg.createTime * 1000);
+        if (firstMessageTime == null || msgTime.isBefore(firstMessageTime!)) {
+          firstMessageTime = msgTime;
+        }
+        if (lastMessageTime == null || msgTime.isAfter(lastMessageTime!)) {
+          lastMessageTime = msgTime;
+        }
+        
+        // 记录活跃日期
+        activeDates.add('${msgTime.year}-${msgTime.month}-${msgTime.day}');
+      }
+    }
+
+    await logger.info('AnalyticsService', '$year 年统计完成，共 ${activeDates.length} 个活跃天');
+
+    return ChatStatistics(
+      totalMessages: totalMessages,
+      textMessages: textMessages,
+      imageMessages: imageMessages,
+      voiceMessages: voiceMessages,
+      videoMessages: videoMessages,
+      otherMessages: otherMessages,
+      sentMessages: sentMessages,
+      receivedMessages: receivedMessages,
+      firstMessageTime: firstMessageTime,
+      lastMessageTime: lastMessageTime,
+      activeDays: activeDates.length,
+    );
+  }
+  // ==================== 【新增代码结束】 ====================
+  
   /// 获取指定时间范围内的消息
   Future<List<Message>> getMessagesByDateRange(
     String sessionId,
