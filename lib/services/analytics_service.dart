@@ -249,20 +249,25 @@ class AnalyticsService {
   }
 
 // ==================== 【新增代码开始：年份筛选专用逻辑】 ====================
-  
-  /// 分析指定年份的私聊统计 (新增：支持按年份筛选)
-  Future<ChatStatistics> analyzeYearlyPrivateChats(int year) async {
-    await logger.debug('AnalyticsService', '========== 开始分析 $year 年私聊统计 ==========');
+
+/// 【高性能版】同时分析指定年份的“总体统计”和“联系人排名”
+  /// 返回: {'stats': ChatStatistics, 'rankings': List<ContactRanking>}
+  Future<Map<String, dynamic>> analyzeYearlyData(int year) async {
+    final startTimeLog = DateTime.now();
+    await logger.debug('AnalyticsService', '========== 开始分析 $year 年数据 (高性能整合版) ==========');
 
     // 1. 获取所有私聊会话
     final sessions = await _databaseService.getSessions();
     final privateSessions = sessions.where((s) => !s.isGroup).toList();
+    final displayNames = await _databaseService.getDisplayNames(privateSessions.map((s) => s.username).toList());
+    
+    // 定义时间戳范围 (秒)
+    final startDt = DateTime(year, 1, 1);
+    final endDt = DateTime(year, 12, 31, 23, 59, 59);
+    final startTs = startDt.millisecondsSinceEpoch ~/ 1000;
+    final endTs = endDt.millisecondsSinceEpoch ~/ 1000;
 
-    // 2. 定义该年份的起止时间
-    final startTime = DateTime(year, 1, 1);
-    final endTime = DateTime(year, 12, 31, 23, 59, 59);
-
-    // 3. 累加统计结果
+    // 总体统计累加器
     int totalMessages = 0;
     int textMessages = 0;
     int imageMessages = 0;
@@ -273,80 +278,107 @@ class AnalyticsService {
     int receivedMessages = 0;
     DateTime? firstMessageTime;
     DateTime? lastMessageTime;
-    
-    // 用于统计活跃天数
     final activeDates = <String>{};
 
-    int processedCount = 0;
+    // 联系人排名列表
+    final rankings = <ContactRanking>[];
 
-    for (final session in privateSessions) {
-      // --- 防卡死关键点：每处理 20 个会话，暂停 0 毫秒让出 CPU 给 UI 线程 ---
-      processedCount++;
-      if (processedCount % 20 == 0) {
-        await Future.delayed(Duration.zero);
-      }
-      // -----------------------------------------------------------
+    // 2. 并发处理 (每次 20 个)
+    const batchSize = 20;
+    for (var i = 0; i < privateSessions.length; i += batchSize) {
+      final end = (i + batchSize < privateSessions.length) ? i + batchSize : privateSessions.length;
+      final batch = privateSessions.sublist(i, end);
 
-      final messages = await getMessagesByDateRange(
-        session.username,
-        startTime,
-        endTime,
-      );
-
-      if (messages.isEmpty) continue;
-
-      totalMessages += messages.length;
-
-      for (final msg in messages) {
-        // 统计类型
-        if (msg.isTextMessage) {
-          textMessages++;
-        } else if (msg.localType == 3 || msg.localType == 47) { 
-          imageMessages++;
-        } else if (msg.localType == 34) { 
-          voiceMessages++;
-        } else if (msg.localType == 43 || msg.localType == 62) { 
-          videoMessages++;
-        } else {
-          otherMessages++;
-        }
-
-        // 统计收发
-        if (msg.isSend == 1) {
-          sentMessages++;
-        } else {
-          receivedMessages++;
-        }
-
-        // 统计时间范围
-        final msgTime = DateTime.fromMillisecondsSinceEpoch(msg.createTime * 1000);
-        if (firstMessageTime == null || msgTime.isBefore(firstMessageTime!)) {
-          firstMessageTime = msgTime;
-        }
-        if (lastMessageTime == null || msgTime.isAfter(lastMessageTime!)) {
-          lastMessageTime = msgTime;
-        }
+      final results = await Future.wait(batch.map((session) async {
+        // --- 优化A: 时间范围初筛 ---
+        final timeRange = await _databaseService.getSessionTimeRange(session.username);
+        final first = timeRange['first'];
+        final last = timeRange['last'];
         
-        // 记录活跃日期
-        activeDates.add('${msgTime.year}-${msgTime.month}-${msgTime.day}');
+        // 如果会话时间跟今年不沾边，直接跳过
+        if (first == null || last == null) return null;
+        if (last < startTs || first > endTs) return null;
+
+        // --- 优化B: 读取消息 ---
+        final messages = await getMessagesByDateRange(session.username, startDt, endDt);
+        if (messages.isEmpty) return null;
+
+        return MapEntry(session, messages);
+      }));
+
+      // 处理结果
+      for (final result in results) {
+        if (result == null) continue;
+        final session = result.key;
+        final messages = result.value;
+
+        // A. 累加到总体统计
+        totalMessages += messages.length;
+        
+        // B. 计算单人统计 (用于排名)
+        int sessionSent = 0;
+        int sessionReceived = 0;
+
+        for (final msg in messages) {
+          // 类型统计
+          if (msg.isTextMessage) textMessages++;
+          else if (msg.localType == 3 || msg.localType == 47) imageMessages++;
+          else if (msg.localType == 34) voiceMessages++;
+          else if (msg.localType == 43 || msg.localType == 62) videoMessages++;
+          else otherMessages++;
+
+          // 收发统计
+          if (msg.isSend == 1) {
+            sentMessages++;
+            sessionSent++;
+          } else {
+            receivedMessages++;
+            sessionReceived++;
+          }
+
+          // 时间统计
+          final msgTime = DateTime.fromMillisecondsSinceEpoch(msg.createTime * 1000);
+          if (firstMessageTime == null || msgTime.isBefore(firstMessageTime!)) firstMessageTime = msgTime;
+          if (lastMessageTime == null || msgTime.isAfter(lastMessageTime!)) lastMessageTime = msgTime;
+          activeDates.add('${msgTime.year}-${msgTime.month}-${msgTime.day}');
+        }
+
+        // C. 添加到排名列表
+        rankings.add(ContactRanking(
+          username: session.username,
+          displayName: displayNames[session.username] ?? session.username,
+          messageCount: messages.length,
+          sentCount: sessionSent,
+          receivedCount: sessionReceived,
+          lastMessageTime: null, // 单年模式下不重要，省点内存
+        ));
       }
+      // 让出时间片
+      await Future.delayed(Duration.zero);
     }
 
-    await logger.info('AnalyticsService', '$year 年统计完成，共 ${activeDates.length} 个活跃天');
+    // 排序
+    rankings.sort((a, b) => b.messageCount.compareTo(a.messageCount));
 
-    return ChatStatistics(
-      totalMessages: totalMessages,
-      textMessages: textMessages,
-      imageMessages: imageMessages,
-      voiceMessages: voiceMessages,
-      videoMessages: videoMessages,
-      otherMessages: otherMessages,
-      sentMessages: sentMessages,
-      receivedMessages: receivedMessages,
-      firstMessageTime: firstMessageTime,
-      lastMessageTime: lastMessageTime,
-      activeDays: activeDates.length,
-    );
+    final elapsed = DateTime.now().difference(startTimeLog);
+    await logger.info('AnalyticsService', '$year 年分析完成，耗时: ${elapsed.inSeconds}秒');
+
+    return {
+      'stats': ChatStatistics(
+        totalMessages: totalMessages,
+        textMessages: textMessages,
+        imageMessages: imageMessages,
+        voiceMessages: voiceMessages,
+        videoMessages: videoMessages,
+        otherMessages: otherMessages,
+        sentMessages: sentMessages,
+        receivedMessages: receivedMessages,
+        firstMessageTime: firstMessageTime,
+        lastMessageTime: lastMessageTime,
+        activeDays: activeDates.length,
+      ),
+      'rankings': rankings
+    };
   }
   // ==================== 【新增代码结束】 ====================
   

@@ -18,6 +18,54 @@ class AnalyticsCacheService {
 
   AnalyticsCacheService._();
 
+// ==================== 新增：年份缓存支持 ====================
+  String _getYearlyKey(int year) => 'cache_yearly_data_$year';
+
+  /// 保存指定年份的数据 (统计 + 排名)
+  Future<void> saveYearlyData({
+    required int year,
+    required ChatStatistics stats,
+    required List<ContactRanking> rankings,
+    required int dbModifiedTime,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final data = {
+        'stats': stats.toJson(),
+        'rankings': rankings.map((r) => r.toJson()).toList(),
+        'dbModifiedTime': dbModifiedTime, // 每个年份文件单独记录数据库版本
+      };
+      await prefs.setString(_getYearlyKey(year), json.encode(data));
+    } catch (e) {
+      // 忽略错误
+    }
+  }
+
+  /// 读取指定年份的数据
+  Future<Map<String, dynamic>?> loadYearlyData(int year, int currentDbTime) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonString = prefs.getString(_getYearlyKey(year));
+      
+      if (jsonString == null) return null;
+
+      final data = json.decode(jsonString);
+      
+      // 校验数据库版本，如果不一致说明数据旧了，返回 null 触发重算
+      final cachedDbTime = data['dbModifiedTime'] as int?;
+      if (cachedDbTime != currentDbTime) return null;
+
+      return {
+        'stats': ChatStatistics.fromJson(data['stats']),
+        'rankings': (data['rankings'] as List)
+            .map((e) => ContactRanking.fromJson(e))
+            .toList(),
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
   /// 保存基础分析结果
   Future<void> saveBasicAnalytics({
     required ChatStatistics? overallStats,

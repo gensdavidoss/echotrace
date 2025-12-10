@@ -11,7 +11,7 @@ import '../models/analytics_data.dart';
 import '../utils/string_utils.dart';
 import 'annual_report_display_page.dart';
 
-/// 数据分析页面 - 最终修正版
+/// 数据分析页面
 class AnalyticsPage extends StatefulWidget {
   final DatabaseService databaseService;
 
@@ -25,15 +25,14 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
   late AnalyticsService _analyticsService;
   bool _isLoading = false;
   
-  // ==================== 状态管理 ====================
-  // 当前选中的年份 (null 代表全部)
-  int? _selectedYear; 
-  // 可选的年份列表
+  // ==================== 新增：年份筛选状态 ====================
+  int? _selectedYear; // null 代表全部年份
   List<int> _availableYears = []; 
+  // ========================================================
 
   ChatStatistics? _overallStats;
   List<ContactRanking>? _contactRankings;
-  List<ContactRanking>? _allContactRankings; 
+  List<ContactRanking>? _allContactRankings; // 保存所有排名
 
   // 加载进度状态
   String _loadingStatus = '';
@@ -47,42 +46,61 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
   void initState() {
     super.initState();
     _analyticsService = AnalyticsService(widget.databaseService);
-    // 延迟到下一帧执行
+    // 延迟到下一帧执行，避免在 initState 中使用 context
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadData();
     });
   }
 
-  /// 初始加载数据
   Future<void> _loadData() async {
+    await logger.debug('AnalyticsPage', '========== 开始加载数据分析 ==========');
+
     if (!widget.databaseService.isConnected) {
+      await logger.warning('AnalyticsPage', '数据库未连接');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请先连接数据库')));
       }
       return;
     }
 
+    await logger.debug('AnalyticsPage', '数据库已连接，开始加载数据');
+
     if (!mounted) return;
     setState(() {
       _isLoading = true;
-      _loadingStatus = '正在准备数据...';
+      _loadingStatus = '正在检查缓存...';
       _processedCount = 0;
       _totalCount = 0;
     });
 
     try {
-      // 首次加载，默认分析全部数据，以此来计算时间跨度
-      await _performAnalysis(DateTime.now().millisecondsSinceEpoch);
+      final dbTime = await _getDbModifiedTime();
+      // 首次加载，默认分析全部数据
+      await _performAnalysis(dbTime);
+
     } catch (e, stackTrace) {
       await logger.error('AnalyticsPage', '加载数据失败: $e', e, stackTrace);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('加载失败: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('加载数据失败: $e')));
         setState(() => _isLoading = false);
       }
     }
   }
 
-  /// 计算有哪些年份可选 (基于统计数据)
+  /// 获取数据库文件修改时间
+  Future<int> _getDbModifiedTime() async {
+    final dbPath = widget.databaseService.dbPath;
+    if (dbPath != null) {
+      final dbFile = File(dbPath);
+      if (await dbFile.exists()) {
+        final stat = await dbFile.stat();
+        return stat.modified.millisecondsSinceEpoch;
+      }
+    }
+    return DateTime.now().millisecondsSinceEpoch;
+  }
+
+  /// 计算有哪些年份可选
   void _calculateAvailableYears() {
     final currentYear = DateTime.now().year;
     int startYear = currentYear;
@@ -94,85 +112,118 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
 
     if (startYear > currentYear) startYear = currentYear;
 
-    // 生成年份列表 (从今年倒推到最早年份)
+    // 生成年份列表
     final years = <int>[];
     for (int y = currentYear; y >= startYear; y--) {
       years.add(y);
     }
     
-    // 只有当列表真正变化时才更新状态
     if (years.length != _availableYears.length || (years.isNotEmpty && years.first != _availableYears.first)) {
-       setState(() {
-         _availableYears = years;
-       });
+       setState(() => _availableYears = years);
     }
   }
 
-  /// 核心分析逻辑：执行数据分析
+  /// 核心分析逻辑（整合了缓存和高性能计算）
   Future<void> _performAnalysis(int dbModifiedTime) async {
+    await logger.debug('AnalyticsPage', '========== 开始执行数据分析 ==========');
     final cacheService = AnalyticsCacheService.instance;
 
     if (!mounted) return;
     setState(() {
-        _isLoading = true;
-        _loadingStatus = _selectedYear == null 
-            ? '正在分析全部历史数据...' 
-            : '正在分析 $_selectedYear 年数据...';
+       _isLoading = true;
+       _loadingStatus = _selectedYear == null 
+           ? '正在分析所有私聊数据...' 
+           : '正在分析 $_selectedYear 年数据...';
     });
 
     try {
-      // 1. 获取总体统计
-      ChatStatistics stats;
-      
-      // 根据是否选择了年份，调用不同的 Service 方法
-      if (_selectedYear == null) {
-        // === 查全部 ===
-        stats = await _analyticsService.analyzeAllPrivateChats();
+      ChatStatistics? stats;
+      List<ContactRanking>? rankings;
+
+      // 1. 【缓存检查】
+      if (_selectedYear != null) {
+        // --- 单年模式：查单年缓存 ---
+        final cachedData = await cacheService.loadYearlyData(_selectedYear!, dbModifiedTime);
+        if (cachedData != null) {
+          stats = cachedData['stats'] as ChatStatistics;
+          rankings = cachedData['rankings'] as List<ContactRanking>;
+          await logger.info('AnalyticsPage', '命中 $_selectedYear 年缓存，直接显示');
+        }
       } else {
-        // === 查特定年份 ===
-        stats = await _analyticsService.analyzeYearlyPrivateChats(_selectedYear!);
+        // --- 全部模式：查原有缓存 ---
+        final cachedBasic = await cacheService.loadBasicAnalytics();
+        if (cachedBasic != null) {
+          final isChanged = await cacheService.isDatabaseChanged(dbModifiedTime);
+          if (!isChanged) {
+             stats = cachedBasic['overallStats'];
+             rankings = cachedBasic['contactRankings'];
+             await logger.info('AnalyticsPage', '命中全部数据缓存');
+          }
+        }
       }
 
+      // 2. 【计算逻辑】(如果无缓存)
+      if (stats == null) {
+        if (_selectedYear == null) {
+          // === 方案A：全部年份 (原有逻辑) ===
+          stats = await _analyticsService.analyzeAllPrivateChats();
+          
+          setState(() => _loadingStatus = '正在统计联系人排名...');
+          rankings = await _loadRankingsWithProgress(); // 使用原有的进度条加载方式
+
+          // 保存缓存
+          await cacheService.saveBasicAnalytics(
+            overallStats: stats,
+            contactRankings: rankings,
+            dbModifiedTime: dbModifiedTime,
+          );
+        } else {
+          // === 方案B：指定年份 (新的高性能逻辑) ===
+          // 调用 Service 中新加的 analyzeYearlyData 方法
+          // 注意：需要在 AnalyticsService 中确保添加了该方法
+          final result = await _analyticsService.analyzeYearlyData(_selectedYear!);
+          stats = result['stats'] as ChatStatistics;
+          rankings = result['rankings'] as List<ContactRanking>;
+
+          // 保存缓存
+          await cacheService.saveYearlyData(
+            year: _selectedYear!,
+            stats: stats,
+            rankings: rankings,
+            dbModifiedTime: dbModifiedTime,
+          );
+        }
+      }
+
+      // 3. 【更新界面】
       if (!mounted) return;
       setState(() {
         _overallStats = stats;
-        // 每次分析完都重新确认一下年份列表（防止首次加载时列表为空）
+        _allContactRankings = rankings;
+        // 根据当前的 Top N 截取
+        _contactRankings = rankings!.take(_topN).toList();
+        _loadingStatus = '完成';
+        _isLoading = false;
+        // 刷新年份列表
         _calculateAvailableYears();
       });
 
-      // 2. 获取联系人排名 (这一步非常关键，数据量大时会比较慢)
-      setState(() => _loadingStatus = '正在统计联系人排名...');
-      
-      final rankings = await _loadRankingsWithProgress();
-
-      // 3. 只有在“查全部”模式下才保存全局缓存，避免单年数据覆盖了全局缓存
-      if (_selectedYear == null) {
-        await cacheService.saveBasicAnalytics(
-          overallStats: _overallStats,
-          contactRankings: rankings,
-          dbModifiedTime: dbModifiedTime,
-        );
+    } catch (e, stackTrace) {
+      await logger.error('AnalyticsPage', '分析失败: $e', e, stackTrace);
+      if (mounted) {
+         setState(() => _isLoading = false);
+         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('分析失败: $e')));
       }
-
-      if (!mounted) return;
-      setState(() {
-        _allContactRankings = rankings;
-        _contactRankings = rankings.take(_topN).toList();
-        _loadingStatus = '完成';
-        _isLoading = false;
-      });
-      
-    } catch (e) {
-       // 错误处理
-       if (mounted) setState(() => _isLoading = false);
-       rethrow;
     }
   }
 
-  /// 加载联系人排名 (支持年份筛选)
+  // 保留原有的加载排名方法（用于"全部年份"模式）
   Future<List<ContactRanking>> _loadRankingsWithProgress() async {
+    await logger.debug('AnalyticsPage', '开始加载联系人排名（带进度）');
+
     final sessions = await widget.databaseService.getSessions();
     final privateSessions = sessions.where((s) => !s.isGroup).toList();
+    await logger.debug('AnalyticsPage', '获取到 ${privateSessions.length} 个私聊会话');
 
     if (!mounted) return [];
     setState(() {
@@ -184,172 +235,89 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     final displayNames = await widget.databaseService.getDisplayNames(
       privateSessions.map((s) => s.username).toList(),
     );
-
-    // 预取头像
+    
     try {
-      if (mounted) {
-        final appState = context.read<AppState>();
-        await appState.fetchAndCacheAvatars(privateSessions.map((s) => s.username).toList());
-      }
+      final appState = context.read<AppState>();
+      await appState.fetchAndCacheAvatars(
+        privateSessions.map((s) => s.username).toList(),
+      );
     } catch (_) {}
 
-    // 如果选了年份，先算出起止时间戳
-    DateTime? startDate;
-    DateTime? endDate;
-    if (_selectedYear != null) {
-      startDate = DateTime(_selectedYear!, 1, 1);
-      endDate = DateTime(_selectedYear!, 12, 31, 23, 59, 59);
-    }
+    int skippedCount = 0;
 
     for (var i = 0; i < privateSessions.length; i++) {
-      if (!mounted) break;
       final session = privateSessions[i];
+      if (!mounted) break;
       
+      // 更新进度
       setState(() {
         _processedCount = i + 1;
         _loadingStatus = '正在分析: ${displayNames[session.username] ?? session.username}';
       });
 
-      // 防止界面卡死，每处理20个暂停一下
-      if (i % 20 == 0) await Future.delayed(Duration.zero);
+      // 防卡死
+      if ((i + 1) % 50 == 0) await Future.delayed(Duration.zero);
 
       try {
-        int messageCount = 0;
-        int sentCount = 0;
-        int receivedCount = 0;
-
-        // === 分支逻辑 ===
-        if (_selectedYear == null) {
-            // A. 全部年份：直接查数据库统计表（极快）
-            final stats = await widget.databaseService.getSessionMessageStats(session.username);
-            messageCount = stats['total'] as int;
-            sentCount = stats['sent'] as int;
-            receivedCount = stats['received'] as int;
-        } else {
-            // B. 指定年份：必须查具体消息表（较慢，但准确）
-            // 先粗略判断总数，如果总数是0就别查了
-            final globalStats = await widget.databaseService.getSessionMessageStats(session.username);
-            if ((globalStats['total'] as int) == 0) continue;
-
-            // 调用 Service 获取该时间段消息
-            final msgs = await _analyticsService.getMessagesByDateRange(
-                session.username, 
-                startDate!, 
-                endDate!
-            );
-            
-            messageCount = msgs.length;
-            if (messageCount > 0) {
-               sentCount = msgs.where((m) => m.isSend == 1).length;
-               receivedCount = messageCount - sentCount;
-            }
+        final stats = await widget.databaseService.getSessionMessageStats(session.username);
+        final messageCount = stats['total'] as int;
+        if (messageCount == 0) {
+          skippedCount++;
+          continue;
         }
-
-        if (messageCount == 0) continue;
 
         rankings.add(
           ContactRanking(
             username: session.username,
             displayName: displayNames[session.username] ?? session.username,
             messageCount: messageCount,
-            sentCount: sentCount,
-            receivedCount: receivedCount,
-            lastMessageTime: null, // 简化处理
+            sentCount: stats['sent'] as int,
+            receivedCount: stats['received'] as int,
+            lastMessageTime: null, 
           ),
         );
       } catch (e) {
-        // 忽略单个错误
+        // 忽略错误
       }
     }
 
-    // 排序
     rankings.sort((a, b) => b.messageCount.compareTo(a.messageCount));
-    
-    // 只取前 50 名，避免内存爆炸
+    // 原代码这里取了前50，我们也保持一致
     return rankings.take(50).toList();
   }
 
-  // ==================== 界面交互逻辑 ====================
-
-  /// 弹出年份选择菜单
-  void _showYearSelectionMenu() {
-    if (_isLoading) return;
-
-    showModalBottomSheet(
+  Future<bool?> _showDatabaseChangedDialog() async {
+    return showDialog<bool>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (BuildContext context) {
-        return Container(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.only(bottom: 12),
-                child: Text('选择分析年份', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              ),
-              const Divider(height: 1),
-              Flexible(
-                child: ListView(
-                  shrinkWrap: true,
-                  children: [
-                    // 选项：全部年份
-                    ListTile(
-                      leading: const Icon(Icons.calendar_view_month),
-                      title: const Text('全部年份 (历史累计)'),
-                      trailing: _selectedYear == null ? const Icon(Icons.check, color: Colors.green) : null,
-                      onTap: () {
-                        Navigator.pop(context);
-                        if (_selectedYear != null) {
-                          setState(() => _selectedYear = null);
-                          // 触发重新分析
-                          _performAnalysis(DateTime.now().millisecondsSinceEpoch);
-                        }
-                      },
-                    ),
-                    // 选项：具体年份列表
-                    ..._availableYears.map((year) {
-                      return ListTile(
-                        leading: const Icon(Icons.calendar_today_outlined),
-                        title: Text('$year年'),
-                        trailing: _selectedYear == year ? const Icon(Icons.check, color: Colors.green) : null,
-                        onTap: () {
-                          Navigator.pop(context);
-                          if (_selectedYear != year) {
-                            setState(() => _selectedYear = year);
-                            // 触发重新分析
-                            _performAnalysis(DateTime.now().millisecondsSinceEpoch);
-                          }
-                        },
-                      );
-                    }),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  /// 跳转到年度报告页面
-  Future<void> _navigateToReport(int? year) async {
-    if (_isLoading) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => AnnualReportDisplayPage(
-          databaseService: widget.databaseService,
-          year: year,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.info_outline, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('数据库已更新'),
+          ],
         ),
+        content: const Text(
+          '检测到数据库已发生变化，是否重新分析数据？\n\n'
+          '• 重新分析：获取最新的统计结果（需要一些时间）\n'
+          '• 使用旧数据：快速加载，但可能不包含最新消息',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('使用旧数据'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('重新分析'),
+          ),
+        ],
       ),
     );
   }
 
-  // ==================== UI 构建部分 ====================
+  // ==================== 界面构建 ====================
 
   @override
   Widget build(BuildContext context) {
@@ -375,7 +343,12 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border(bottom: BorderSide(color: Colors.grey.withValues(alpha: 0.1))),
+        border: Border(
+          bottom: BorderSide(
+            color: Colors.grey.withValues(alpha: 0.1),
+            width: 1,
+          ),
+        ),
       ),
       child: Row(
         children: [
@@ -399,26 +372,25 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
 
   Widget _buildLoadingView() {
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          CircularProgressIndicator(
-            value: _totalCount > 0 ? _processedCount / _totalCount : null,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            _loadingStatus,
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          if (_totalCount > 0)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                '进度: $_processedCount / $_totalCount',
-                style: TextStyle(color: Colors.grey[600]),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 400),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 80, height: 80,
+              child: CircularProgressIndicator(
+                strokeWidth: 3,
+                value: _totalCount > 0 ? _processedCount / _totalCount : null,
               ),
             ),
-        ],
+            const SizedBox(height: 32),
+            Text(_loadingStatus, style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 16),
+            if (_totalCount > 0)
+              Text('$_processedCount / $_totalCount', style: const TextStyle(color: Colors.grey)),
+          ],
+        ),
       ),
     );
   }
@@ -430,7 +402,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
         children: [
           Icon(Icons.analytics_outlined, size: 80, color: Colors.grey[300]),
           const SizedBox(height: 16),
-          Text('暂无数据', style: Theme.of(context).textTheme.titleLarge?.copyWith(color: Colors.grey[400])),
+          const Text('暂无数据'),
         ],
       ),
     );
@@ -440,143 +412,189 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // 1. 年份筛选按钮 (这是你要的新交互)
+        // 1. 新增：年份筛选按钮
         _buildYearFilterButton(),
-        
-        // 2. 年度报告入口卡片
+
+        // 2. 年度报告入口
         _buildAnnualReportEntry(),
         const SizedBox(height: 16),
 
-        // 3. 总体统计 (会随年份变化)
+        // 3. 统计图表 (完全保留原样)
         _buildOverallStatsCard(),
         const SizedBox(height: 16),
         _buildMessageTypeChart(),
         const SizedBox(height: 16),
-        
-        // 4. 发送接收比例
         _buildSendReceiveChart(),
         const SizedBox(height: 16),
         
-        // 5. 联系人排名 (会随年份变化)
+        // 4. 联系人排名 (保留 SegmentedButton 和 绿标头像)
         _buildContactRankingCard(),
       ],
     );
   }
 
-  /// 构建年份筛选按钮 (替换原来的横向列表)
+  // ==================== 新增 UI 组件 ====================
+
   Widget _buildYearFilterButton() {
     final text = _selectedYear == null ? '📅  全部年份 (历史累计)' : '📅  $_selectedYear 年数据';
-    
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Row(
-        children: [
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: _showYearSelectionMenu,
-              borderRadius: BorderRadius.circular(20),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.05),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      text,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Icon(
-                      Icons.arrow_drop_down,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                  ],
-                ),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: _showYearSelectionMenu,
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5)),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4, offset: const Offset(0, 2)),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(text, style: TextStyle(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold, fontSize: 14)),
+                  const SizedBox(width: 4),
+                  Icon(Icons.arrow_drop_down, color: Theme.of(context).colorScheme.primary),
+                ],
               ),
             ),
           ),
-          const Spacer(),
-          // 右侧显示提示
-          Text(
-            '点击左侧按钮切换年份',
-            style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-          ),
-        ],
+        ),
       ),
     );
   }
 
+  void _showYearSelectionMenu() {
+    if (_isLoading) return;
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(padding: EdgeInsets.only(bottom: 12), child: Text('选择分析年份', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+              const Divider(height: 1),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.calendar_view_month),
+                      title: const Text('全部年份'),
+                      trailing: _selectedYear == null ? const Icon(Icons.check, color: Colors.green) : null,
+                      onTap: () async {
+                        Navigator.pop(context);
+                        if (_selectedYear != null) {
+                          setState(() => _selectedYear = null);
+                          final dbTime = await _getDbModifiedTime();
+                          _performAnalysis(dbTime);
+                        }
+                      },
+                    ),
+                    ..._availableYears.map((year) => ListTile(
+                      leading: const Icon(Icons.calendar_today),
+                      title: Text('$year年'),
+                      trailing: _selectedYear == year ? const Icon(Icons.check, color: Colors.green) : null,
+                      onTap: () async {
+                        Navigator.pop(context);
+                        if (_selectedYear != year) {
+                          setState(() => _selectedYear = year);
+                          final dbTime = await _getDbModifiedTime();
+                          _performAnalysis(dbTime);
+                        }
+                      },
+                    )),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ==================== 原有 UI 组件 (完全保留) ====================
   /// 年度报告入口卡片
   Widget _buildAnnualReportEntry() {
     const wechatGreen = Color(0xFF07C160);
-    // 动态标题
-    final title = _selectedYear == null 
-        ? '生成详细年度报告' 
-        : '生成 $_selectedYear 年度报告';
+    // 动态调整标题
+    final title = _selectedYear == null ? '查看详细年度报告' : '查看 $_selectedYear 年度报告';
 
     return Card(
-      elevation: 2,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: const BorderSide(color: wechatGreen, width: 1),
       ),
       child: InkWell(
-        onTap: () => _navigateToReport(_selectedYear),
+        onTap: _isLoading
+            ? null
+            : () async {
+                 // 显示加载状态
+                setState(() {
+                  _isLoading = true;
+                  _loadingStatus = '正在准备年度报告...';
+                });
+                try {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => AnnualReportDisplayPage(
+                        databaseService: widget.databaseService,
+                        year: _selectedYear, // 传入年份
+                      ),
+                    ),
+                  );
+                } finally {
+                   // 隐藏加载状态
+                  if (mounted) {
+                    setState(() {
+                      _isLoading = false;
+                      _loadingStatus = '';
+                    });
+                  }
+                }
+              },
         borderRadius: BorderRadius.circular(12),
         child: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            gradient: LinearGradient(
-              colors: [Colors.white, wechatGreen.withValues(alpha: 0.05)],
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-            ),
-          ),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
           child: Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: wechatGreen.withValues(alpha: 0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.description_outlined, color: wechatGreen),
-              ),
-              const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '点击查看深度分析，发现更多有趣洞察',
-                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                      '深度分析你的聊天数据，发现更多有趣洞察',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
                     ),
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right, color: Colors.grey),
+              _isLoading
+                  ? const SizedBox(
+                      width: 24, height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(wechatGreen)),
+                    )
+                  : const Icon(Icons.chevron_right, color: Colors.grey, size: 24),
             ],
           ),
         ),
@@ -584,87 +602,66 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     );
   }
 
+/// 总体统计卡片
   Widget _buildOverallStatsCard() {
     final stats = _overallStats!;
     return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                const Icon(Icons.bar_chart, size: 20, color: Colors.blue),
-                const SizedBox(width: 8),
-                Text(
-                  _selectedYear == null ? '私聊总体统计' : '$_selectedYear 年数据统计',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ],
+            const Text(
+              '私聊总体统计',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
-            const Divider(height: 24),
+            const SizedBox(height: 16),
             _buildStatRow('总消息数', stats.totalMessages.toString()),
             _buildStatRow('活跃天数', stats.activeDays.toString()),
             _buildStatRow('平均每天', stats.averageMessagesPerDay.toStringAsFixed(1)),
+            _buildStatRow('聊天时长', '${stats.chatDurationDays} 天'),
             if (stats.firstMessageTime != null)
-              _buildStatRow('时间跨度', '${_formatDateTime(stats.firstMessageTime!)} 至 ${_formatDateTime(stats.lastMessageTime ?? DateTime.now())}'),
+              _buildStatRow('首条消息', _formatDateTime(stats.firstMessageTime!)),
+            if (stats.lastMessageTime != null)
+              _buildStatRow('最新消息', _formatDateTime(stats.lastMessageTime!)),
           ],
         ),
       ),
     );
   }
 
+  /// 消息类型分布
   Widget _buildMessageTypeChart() {
     final stats = _overallStats!;
     final distribution = stats.messageTypeDistribution;
-
     return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-             Row(
-              children: [
-                const Icon(Icons.pie_chart, size: 20, color: Colors.orange),
-                const SizedBox(width: 8),
-                const Text('消息类型分布', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              ],
+            const Text(
+              '消息类型分布',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
             ...distribution.entries.map((entry) {
               final percentage = stats.totalMessages > 0
                   ? (entry.value / stats.totalMessages * 100).toStringAsFixed(1)
                   : '0.0';
               return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
+                padding: const EdgeInsets.symmetric(vertical: 4),
                 child: Row(
                   children: [
-                    SizedBox(width: 50, child: Text(entry.key, style: const TextStyle(fontWeight: FontWeight.w500))),
+                    SizedBox(width: 60, child: Text(entry.key)),
                     Expanded(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: stats.totalMessages > 0 ? entry.value / stats.totalMessages : 0,
-                          backgroundColor: Colors.grey[100],
-                          minHeight: 8,
-                          valueColor: AlwaysStoppedAnimation<Color>(_getColorForType(entry.key)),
-                        ),
+                      child: LinearProgressIndicator(
+                        value: stats.totalMessages > 0 ? entry.value / stats.totalMessages : 0,
+                        backgroundColor: Colors.grey[200],
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    SizedBox(
-                      width: 100, 
-                      child: Text(
-                        '${entry.value} ($percentage%)', 
-                        textAlign: TextAlign.right,
-                        style: TextStyle(color: Colors.grey[600], fontSize: 13),
-                      )
-                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(width: 80, child: Text('${entry.value} ($percentage%)', textAlign: TextAlign.right)),
                   ],
                 ),
               );
@@ -675,64 +672,39 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     );
   }
 
-  Color _getColorForType(String type) {
-    switch (type) {
-      case '文本': return const Color(0xFF07C160);
-      case '图片': return Colors.blue;
-      case '语音': return Colors.orange;
-      case '视频': return Colors.red;
-      default: return Colors.grey;
-    }
-  }
-
+  /// 发送/接收比例
   Widget _buildSendReceiveChart() {
     final stats = _overallStats!;
     final ratio = stats.sendReceiveRatio;
     return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                const Icon(Icons.compare_arrows, size: 20, color: Colors.purple),
-                const SizedBox(width: 8),
-                const Text('发送/接收比例', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              ],
+            const Text(
+              '发送/接收比例',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
             ...ratio.entries.map((entry) {
-               final percentage = stats.totalMessages > 0
+              final percentage = stats.totalMessages > 0
                   ? (entry.value / stats.totalMessages * 100).toStringAsFixed(1)
                   : '0.0';
               return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
+                padding: const EdgeInsets.symmetric(vertical: 4),
                 child: Row(
                   children: [
-                    SizedBox(width: 50, child: Text(entry.key, style: const TextStyle(fontWeight: FontWeight.w500))),
+                    SizedBox(width: 60, child: Text(entry.key)),
                     Expanded(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: stats.totalMessages > 0 ? entry.value / stats.totalMessages : 0,
-                          backgroundColor: Colors.grey[100],
-                          minHeight: 8,
-                          color: entry.key == '发送' ? Colors.blueAccent : Colors.green,
-                        ),
+                      child: LinearProgressIndicator(
+                        value: stats.totalMessages > 0 ? entry.value / stats.totalMessages : 0,
+                        backgroundColor: Colors.grey[200],
+                        color: entry.key == '发送' ? Colors.blue : Colors.green,
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    SizedBox(
-                      width: 100, 
-                      child: Text(
-                        '${entry.value} ($percentage%)', 
-                        textAlign: TextAlign.right,
-                        style: TextStyle(color: Colors.grey[600], fontSize: 13),
-                      )
-                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(width: 80, child: Text('${entry.value} ($percentage%)', textAlign: TextAlign.right)),
                   ],
                 ),
               );
@@ -743,85 +715,78 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     );
   }
 
+  /// 联系人排名卡片
   Widget _buildContactRankingCard() {
-    if (_contactRankings == null || _contactRankings!.isEmpty) return const SizedBox.shrink();
+    if (_contactRankings == null || _contactRankings!.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Row(
-                  children: [
-                    const Icon(Icons.leaderboard, size: 20, color: Colors.amber),
-                    const SizedBox(width: 8),
-                    Text('Top $_topN 联系人', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  ],
+                Text(
+                  '聊天最多的联系人 Top $_topN',
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
-                // 简单的 Top N 切换
-                DropdownButton<int>(
-                  value: _topN,
-                  underline: const SizedBox(),
-                  items: const [
-                    DropdownMenuItem(value: 10, child: Text("Top 10")),
-                    DropdownMenuItem(value: 20, child: Text("Top 20")),
-                    DropdownMenuItem(value: 50, child: Text("Top 50")),
+                // 保留原有的 SegmentedButton
+                SegmentedButton<int>(
+                  segments: const [
+                    ButtonSegment<int>(value: 10, label: Text('Top 10')),
+                    ButtonSegment<int>(value: 20, label: Text('Top 20')),
+                    ButtonSegment<int>(value: 50, label: Text('Top 50')),
                   ],
-                  onChanged: (val) {
-                    if (val != null) {
-                      setState(() {
-                        _topN = val;
-                        _contactRankings = _allContactRankings?.take(_topN).toList();
-                      });
-                    }
-                  }
+                  selected: {_topN},
+                  onSelectionChanged: (Set<int> newSelection) {
+                    final newTopN = newSelection.first;
+                    setState(() {
+                      _topN = newTopN;
+                      _contactRankings = _allContactRankings?.take(_topN).toList();
+                    });
+                  },
+                  style: ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: _contactRankings!.length,
-              separatorBuilder: (ctx, index) => const Divider(height: 1),
-              itemBuilder: (ctx, index) {
-                final ranking = _contactRankings![index];
-                final appState = Provider.of<AppState>(context);
-                final avatarUrl = appState.getAvatarUrl(ranking.username);
-                return ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: _AvatarWithRank(
-                    avatarUrl: avatarUrl,
-                    rank: index + 1,
-                    displayName: ranking.displayName,
-                  ),
-                  title: Text(
-                    StringUtils.cleanOrDefault(ranking.displayName, ranking.username),
-                    maxLines: 1, 
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  subtitle: Text(
-                    '发送: ${ranking.sentCount} | 接收: ${ranking.receivedCount}',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                  trailing: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[100],
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      '${ranking.messageCount}', 
-                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black87),
-                    ),
-                  ),
+            const SizedBox(height: 16),
+            Builder(
+              builder: (context) {
+                return Column(
+                  children: _contactRankings!.asMap().entries.map((entry) {
+                    final index = entry.key;
+                    final ranking = entry.value;
+                    final appState = Provider.of<AppState>(context);
+                    final avatarUrl = appState.getAvatarUrl(ranking.username);
+                    return ListTile(
+                      key: ValueKey('${ranking.username}_$index'),
+                      leading: _AvatarWithRank(
+                        avatarUrl: avatarUrl,
+                        rank: index + 1,
+                        displayName: ranking.displayName,
+                      ),
+                      title: Text(
+                        StringUtils.cleanOrDefault(ranking.displayName, ranking.username),
+                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Text(
+                        '发送: ${ranking.sentCount} | 接收: ${ranking.receivedCount}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6)),
+                      ),
+                      trailing: Text(
+                        '${ranking.messageCount}',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    );
+                  }).toList(),
                 );
               },
             ),
@@ -833,12 +798,12 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
 
   Widget _buildStatRow(String label, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: TextStyle(color: Colors.grey[600], fontSize: 15)),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          Text(label, style: const TextStyle(color: Colors.grey)),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
         ],
       ),
     );
@@ -849,7 +814,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
   }
 }
 
-// 独立的头像组件，样式美观
+// 独立的类，完全保留原有的绿标头像样式
 class _AvatarWithRank extends StatelessWidget {
   final String? avatarUrl;
   final int rank;
@@ -866,58 +831,45 @@ class _AvatarWithRank extends StatelessWidget {
     final hasAvatar = avatarUrl != null && avatarUrl!.isNotEmpty;
     final fallbackText = StringUtils.getFirstChar(displayName, defaultChar: '聊');
 
-    Color rankColor;
-    if (rank == 1) rankColor = const Color(0xFFFFD700); // 金
-    else if (rank == 2) rankColor = const Color(0xFFC0C0C0); // 银
-    else if (rank == 3) rankColor = const Color(0xFFCD7F32); // 铜
-    else rankColor = Theme.of(context).colorScheme.primary;
-
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.grey.withValues(alpha: 0.1)),
-          ),
-          child: hasAvatar
-            ? CachedNetworkImage(
-                imageUrl: avatarUrl!,
-                imageBuilder: (context, imageProvider) => CircleAvatar(
-                  backgroundImage: imageProvider,
-                ),
-                placeholder: (context, url) => CircleAvatar(backgroundColor: Colors.grey[200], child: Text(fallbackText)),
-                errorWidget: (context, url, error) => CircleAvatar(backgroundColor: Colors.grey[200], child: Text(fallbackText)),
-              )
-            : CircleAvatar(
-                backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
-                child: Text(
-                  fallbackText,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-        ),
-        Positioned(
-          bottom: -2, right: -2,
-          child: Container(
-            width: 18,
-            height: 18,
-            decoration: BoxDecoration(
-              color: rankColor,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2),
-              boxShadow: [
-                 BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 2),
-              ]
+        if (hasAvatar)
+          CachedNetworkImage(
+            imageUrl: avatarUrl!,
+            imageBuilder: (context, imageProvider) => CircleAvatar(
+              radius: 22,
+              backgroundColor: Colors.transparent,
+              backgroundImage: imageProvider,
             ),
-            child: Center(
+            placeholder: (context, url) => CircleAvatar(
+              radius: 22,
+              backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+              child: Text(fallbackText, style: TextStyle(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold)),
+            ),
+            errorWidget: (context, url, error) => CircleAvatar(
+              radius: 22,
+              backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+              child: Text(fallbackText, style: TextStyle(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold)),
+            ),
+          )
+        else
+          CircleAvatar(
+            radius: 22,
+            backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+            child: Text(fallbackText, style: TextStyle(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold)),
+          ),
+        Positioned(
+          bottom: -4,
+          right: -4,
+          child: CircleAvatar(
+            radius: 10,
+            backgroundColor: Colors.white,
+            child: CircleAvatar(
+              radius: 8,
+              backgroundColor: Theme.of(context).colorScheme.primary,
               child: Text(
-                '$rank', 
+                '$rank',
                 style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
               ),
             ),
