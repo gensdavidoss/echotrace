@@ -400,10 +400,28 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     }
   }
 
-  // 显示年份选择弹窗
+  // 显示年份选择弹窗（识别最早年份）
   void _showYearSelectionDialog() {
     final currentYear = DateTime.now().year;
-    final years = List.generate(10, (index) => currentYear - index);
+    int startYear = currentYear;
+
+    // 1. 尝试从统计数据中获取最早年份
+    // _overallStats 是页面加载时就已经算好的总数据
+    if (_overallStats != null && _overallStats!.firstMessageTime != null) {
+      startYear = _overallStats!.firstMessageTime!.year;
+    } else {
+      // 如果还没统计出来（极少情况），默认只显示最近 1 年
+      startYear = currentYear; 
+    }
+
+    // 安全检查：防止时间穿越（比如系统时间错了导致 startYear > currentYear）
+    if (startYear > currentYear) startYear = currentYear;
+
+    // 2. 动态生成年份列表 (从今年倒推到最早年份)
+    final years = <int>[];
+    for (int y = currentYear; y >= startYear; y--) {
+      years.add(y);
+    }
 
     showDialog(
       context: context,
@@ -416,6 +434,7 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
             child: const Text('📅 全部时间 (历史以来)', style: TextStyle(fontSize: 16)),
           ),
           const Divider(),
+          // 3. 循环显示我们动态生成的年份
           ...years.map((year) => SimpleDialogOption(
             padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
             onPressed: () => _navigateToReport(year),
