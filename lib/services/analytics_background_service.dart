@@ -942,6 +942,27 @@ class AnalyticsBackgroundService {
               };
               break;
 
+            // ==========================================
+            // 以下为本次新增的 Isolate Case (Step 3 Added)
+            case 'emoji':
+              sendLog('开始分析 Emoji 人格', level: 'debug');
+              final emojiStats = await analyticsService.analyzeEmojiStats();
+              result = emojiStats.toJson();
+              break;
+
+            case 'socialBattery':
+              sendLog('开始分析社交能量', level: 'debug');
+              final batteryStats = await analyticsService.analyzeSocialBattery();
+              result = batteryStats.toJson();
+              break;
+
+            case 'yearBoundaries':
+              sendLog('开始分析首尾消息', level: 'debug');
+              final boundaries = await analyticsService.analyzeYearBoundaries();
+              result = boundaries.toJson();
+              break;
+            // =================新增代码结束=================
+
             default:
               sendLog('未知的分析类型: ${task.analysisType}', level: 'error');
               throw Exception('未知的分析类型: ${task.analysisType}');
@@ -1181,6 +1202,47 @@ class AnalyticsBackgroundService {
     };
   }
 
+  // 以下为本次新增的包装器方法 (Step 3 Added)
+  // ==========================================
+  /// Emoji 人格分析（后台版本）
+  Future<EmojiStats> analyzeEmojiStatsInBackground(
+    int? filterYear,
+    AnalyticsProgressCallback progressCallback,
+  ) async {
+    final result = await _runAnalysisInIsolate(
+      analysisType: 'emoji',
+      filterYear: filterYear,
+      progressCallback: progressCallback,
+    );
+    return EmojiStats.fromJson(result);
+  }
+
+  /// 社交能量分析（后台版本）
+  Future<SocialBatteryStats> analyzeSocialBatteryInBackground(
+    int? filterYear,
+    AnalyticsProgressCallback progressCallback,
+  ) async {
+    final result = await _runAnalysisInIsolate(
+      analysisType: 'socialBattery',
+      filterYear: filterYear,
+      progressCallback: progressCallback,
+    );
+    return SocialBatteryStats.fromJson(result);
+  }
+
+  /// 首尾消息分析（后台版本）
+  Future<YearBoundaryStats> analyzeYearBoundariesInBackground(
+    int? filterYear,
+    AnalyticsProgressCallback progressCallback,
+  ) async {
+    final result = await _runAnalysisInIsolate(
+      analysisType: 'yearBoundaries',
+      filterYear: filterYear,
+      progressCallback: progressCallback,
+    );
+    return YearBoundaryStats.fromJson(result);
+  }
+
   /// 生成完整年度报告（并行执行所有任务）
   Future<Map<String, dynamic>> generateFullAnnualReport(
     int? filterYear,
@@ -1210,6 +1272,13 @@ class AnalyticsBackgroundService {
       '最快响应好友',
       '我回复最快',
       '曾经的好朋友',
+      // 新增任务
+      '快乐源泉',
+      '消息成分',
+      '年度小作文',
+      'Emoji人格',
+      '社交能量',
+      '光阴首尾',
     ];
 
     await logger.debug('AnnualReport', '初始化 ${taskNames.length} 个任务');
@@ -1416,6 +1485,50 @@ class AnalyticsBackgroundService {
         );
     await logger.info('AnnualReport', '完成任务 12/12: 曾经的好朋友');
 
+// 以下为本次新增的任务执行逻辑 (Step 3 Added)
+    // ==========================================
+    await logger.info('AnnualReport', '开始任务 13/18: 快乐源泉');
+    final hahaReport = await analyzeHahaReportInBackground(
+      filterYear,
+      createProgressCallback('快乐源泉'),
+    ).timeout(timeout);
+    await logger.info('AnnualReport', '完成任务 13/18: 快乐源泉');
+
+    await logger.info('AnnualReport', '开始任务 14/18: 消息成分');
+    final messageTypeStats = await analyzeMessageTypeDistributionInBackground(
+      filterYear,
+      createProgressCallback('消息成分'),
+    ).timeout(timeout);
+    await logger.info('AnnualReport', '完成任务 14/18: 消息成分');
+
+    await logger.info('AnnualReport', '开始任务 15/18: 年度小作文');
+    final messageLengthData = await analyzeMessageLengthInBackground(
+      filterYear,
+      createProgressCallback('年度小作文'),
+    ).timeout(timeout);
+    await logger.info('AnnualReport', '完成任务 15/18: 年度小作文');
+
+    await logger.info('AnnualReport', '开始任务 16/18: Emoji人格');
+    final emojiStats = await analyzeEmojiStatsInBackground(
+      filterYear,
+      createProgressCallback('Emoji人格'),
+    ).timeout(timeout);
+    await logger.info('AnnualReport', '完成任务 16/18: Emoji人格');
+
+    await logger.info('AnnualReport', '开始任务 17/18: 社交能量');
+    final socialBattery = await analyzeSocialBatteryInBackground(
+      filterYear,
+      createProgressCallback('社交能量'),
+    ).timeout(timeout);
+    await logger.info('AnnualReport', '完成任务 17/18: 社交能量');
+
+    await logger.info('AnnualReport', '开始任务 18/18: 光阴首尾');
+    final yearBoundaries = await analyzeYearBoundariesInBackground(
+      filterYear,
+      createProgressCallback('光阴首尾'),
+    ).timeout(timeout);
+    await logger.info('AnnualReport', '完成任务 18/18: 光阴首尾');
+
     final formerFriends =
         formerFriendsData['results'] as List<Map<String, dynamic>>;
     final formerFriendsStats =
@@ -1483,6 +1596,13 @@ class AnalyticsBackgroundService {
       'myFastestReplies': myFastestReplies,
       'formerFriends': formerFriends,
       'formerFriendsStats': formerFriendsStats,
+      // 新增结果字段
+      'hahaReport': hahaReport,
+      'messageType': messageTypeStats.map((e) => e.toJson()).toList(),
+      'messageLength': messageLengthData.toJson(),
+      'emoji': emojiStats.toJson(),
+      'socialBattery': socialBattery.toJson(),
+      'yearBoundaries': yearBoundaries.toJson(),
     };
 
     await logger.debug(

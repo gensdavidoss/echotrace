@@ -339,7 +339,11 @@ class AdvancedAnalyticsService {
     int longestHaha = 0;
     String longestHahaText = '';
 
-    final hahaPattern = RegExp(r'哈+');
+    // 修改开始：升级正则匹配逻辑 
+    // 匹配中文笑声、英文笑声、缩写
+    final hahaPattern = RegExp(r'(哈|嘿|嘻|笑死|xswl|红红火火|恍恍惚惚|lol|lmao|rofl)+', caseSensitive: false);
+    // 单独匹配 h 字母，要求至少连续2个 (防止匹配 hello/hi)
+    final hPattern = RegExp(r'h{2,}', caseSensitive: false);
 
     for (final session in privateSessions) {
       try {
@@ -352,8 +356,9 @@ class AdvancedAnalyticsService {
           if (msg.isSend != 1 || !msg.isTextMessage) continue;
 
           final content = msg.displayContent;
+          
+          // 匹配常规笑声
           final matches = hahaPattern.allMatches(content);
-
           for (final match in matches) {
             final hahaText = match.group(0)!;
             final count = hahaText.length;
@@ -364,11 +369,25 @@ class AdvancedAnalyticsService {
               longestHahaText = hahaText;
             }
           }
+
+          // 匹配 hhh
+          final hMatches = hPattern.allMatches(content);
+          for (final match in hMatches) {
+            final hText = match.group(0)!;
+            final count = hText.length;
+            totalHaha += count; // 这里的 count 也可以按比例折算，这里暂时按字符数算
+             
+            if (count > longestHaha) {
+              longestHaha = count;
+              longestHahaText = hText;
+            }
+          }
         }
       } catch (e) {
         // 跳过错误
       }
     }
+    // 修改结束
 
     return {
       'totalHaha': totalHaha,
@@ -1123,6 +1142,198 @@ class AdvancedAnalyticsService {
       longestSentToDisplayName: longestSentToDisplayName,
       longestMessageTime: longestMessageTime,
       totalTextMessages: textMessageCount,
+    );
+  }
+}
+
+// ==========================================
+  // 以下为本次新增的分析逻辑 (Step 2 Added)
+  // ==========================================
+
+  /// 年度 Emoji 人格分析
+  Future<EmojiStats> analyzeEmojiStats() async {
+    final sessions = await _databaseService.getSessions();
+    final privateSessions = sessions
+        .where((s) => !s.isGroup && !_isSystemAccount(s.username))
+        .toList();
+
+    final emojiCounts = <String, int>{};
+    final categoryScores = <String, int>{};
+
+    // 1. 定义微信表情分类映射 (包含文本格式和对应的 Unicode)
+    final categories = {
+      '快乐星球原住民': {'[破涕为笑]', '[憨笑]', '[呲牙]', '[坏笑]', '[笑脸]', '[奸笑]', '[捂脸]', '[阴险]', '[吃瓜]', '😂', '😆', '🍉'},
+      '反讽阴阳大师': {'[抠鼻]', '[微笑]', '[难过]', '[偷笑]', '[傲慢]', '[再见]', '[鄙视]', '[无语]', '[翻白眼]', '🙂', '🌚', '🙄', '👋'},
+      '商务社交标兵': {'[玫瑰]', '[抱拳]', '[握手]', '[OK]', '[强]', '[礼物]', '[红包]', '[發]', '[庆祝]', '[烟花]', '[蛋糕]', '🌹', '🤝', '👍', '👌', '🎁'},
+      '社恐尴尬分子': {'[撇嘴]', '[害羞]', '[囧]', '[惊恐]', '[皱眉]', '[汗]', '[Emm]', '[尴尬]', '😅', '😓', '😳'},
+      '迷糊瞌睡虫': {'[睡]', '[困]', '[晕]', '[天啊]', '[发抖]', '[疑问]', '[发呆]', '[脸红]', '😴', '😵', '🥱'},
+      '凄惨小苦瓜': {'[抓狂]', '[流泪]', '[大哭]', '[苦涩]', '[裂开]', '[叹气]', '[心碎]', '[凋谢]', '[衰]', '[失望]', '[快哭了]', '[委屈]', '😭', '💔', '🥀'},
+      '人形炸药包': {'[发怒]', '[敲打]', '[骷髅]', '[炸弹]', '[便便]', '[咒骂]', '[打脸]', '[拳头]', '[弱]', '[菜刀]', '😡', '💣', '💩', '👊'},
+      '烂梗制造家': {'[旺柴]', '[得意]', '[悠闲]', '[社会社会]', '[让我看看]', '[耶]', '[白眼]'},
+      '行走人间的小天使': {'[哇]', '[拥抱]', '[爱心]', '[加油]', '[鼓掌]', '[机智]', '[愉快]', '[色]', '[亲亲]', '❤️', '🥰', '😘', '👏'},
+    };
+
+    // 2. 混合正则：优先匹配微信的 [xx] 格式，同时也匹配 Unicode Emoji
+    // 微信表情通常是 [中文字符] 或 [English]
+    final emojiRegex = RegExp(
+      r'(\[[^\[\]]+\])|[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F700}-\u{1F77F}]|[\u{1F780}-\u{1F7FF}]|[\u{1F800}-\u{1F8FF}]|[\u{1F900}-\u{1F9FF}]|[\u{1FA00}-\u{1FA6F}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]',
+      unicode: true,
+    );
+
+    for (final session in privateSessions) {
+      try {
+        final messages = await _analyticsService.getAllMessagesForSession(session.username);
+        final filteredMessages = _filterMessagesByYear(messages);
+
+        for (final msg in filteredMessages) {
+          if (msg.isSend != 1 || !msg.isTextMessage) continue;
+          
+          final matches = emojiRegex.allMatches(msg.displayContent);
+          for (final match in matches) {
+            final emoji = match.group(0)!;
+            emojiCounts[emoji] = (emojiCounts[emoji] ?? 0) + 1;
+
+            // 统计人格分类分数
+            categories.forEach((category, keywords) {
+              if (keywords.contains(emoji)) {
+                categoryScores[category] = (categoryScores[category] ?? 0) + 1;
+              }
+            });
+          }
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+
+    if (emojiCounts.isEmpty) {
+      return EmojiStats(topEmojis: [], personalityTag: "高冷面瘫");
+    }
+
+    // 排序取 Top 5 表情
+    final sortedEmojis = emojiCounts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    
+    final top5 = sortedEmojis.take(5).map((e) => {
+      'emoji': e.key,
+      'count': e.value,
+    }).toList();
+
+    // 判定人格：取得分最高的分类
+    String tag = "神秘人";
+    if (categoryScores.isNotEmpty) {
+      final topCategory = categoryScores.entries.reduce((a, b) => a.value > b.value ? a : b);
+      tag = topCategory.key;
+    } else if (top5.isNotEmpty) {
+      // 如果没命中任何分类（全是生僻表情），兜底逻辑
+      tag = "非主流表情帝";
+    }
+
+    return EmojiStats(topEmojis: top5, personalityTag: tag);
+  }
+
+  /// 社交能量曲线 (月度活跃度)
+  Future<SocialBatteryStats> analyzeSocialBattery() async {
+    // 优化：直接使用日期集合，不加载消息内容，速度快
+    final allSessionsDates = await _databaseService.getAllPrivateSessionsMessageDates(filterYear: _filterYear);
+    
+    final monthlyCounts = List<int>.filled(12, 0);
+    
+    for (final dateSet in allSessionsDates.values) {
+      for (final dateStr in dateSet) {
+        // dateStr 格式通常为 "yyyy-MM-dd"
+        final parts = dateStr.split('-');
+        if (parts.length >= 2) {
+          final month = int.tryParse(parts[1]);
+          if (month != null && month >= 1 && month <= 12) {
+            monthlyCounts[month - 1]++; 
+            // 注意：这里统计的是"活跃天数"的累加（如果那天聊了天，该月计数+1），
+            // 这比纯消息数更能反映"社交意愿"。
+          }
+        }
+      }
+    }
+
+    int peakMonth = 0;
+    int lowMonth = 0;
+    int maxVal = -1;
+    int minVal = 9999999;
+
+    for (int i = 0; i < 12; i++) {
+      if (monthlyCounts[i] > maxVal) {
+        maxVal = monthlyCounts[i];
+        peakMonth = i + 1;
+      }
+      // 只有当该月有数据时才算作低谷，避免未发生的月份干扰
+      if (monthlyCounts[i] < minVal && monthlyCounts[i] > 0) {
+        minVal = monthlyCounts[i];
+        lowMonth = i + 1;
+      }
+    }
+    // 如果没有数据，默认为1月
+    if (lowMonth == 0) lowMonth = 1;
+
+    return SocialBatteryStats(
+      monthlyCounts: monthlyCounts, 
+      peakMonth: peakMonth, 
+      lowMonth: lowMonth
+    );
+  }
+
+  /// 首尾消息 (敲门人与守夜人)
+  Future<YearBoundaryStats> analyzeYearBoundaries() async {
+    final sessions = await _databaseService.getSessions();
+    final privateSessions = sessions
+        .where((s) => !s.isGroup && !_isSystemAccount(s.username))
+        .toList();
+
+    final displayNames = await _databaseService.getDisplayNames(
+      privateSessions.map((s) => s.username).toList(),
+    );
+
+    Message? firstMsg;
+    Message? lastMsg;
+    String? firstUser;
+    String? lastUser;
+
+    for (final session in privateSessions) {
+      try {
+        final messages = await _analyticsService.getAllMessagesForSession(session.username);
+        final yearMessages = _filterMessagesByYear(messages);
+        
+        if (yearMessages.isEmpty) continue;
+
+        // 寻找全年的首尾
+        final sessionFirst = yearMessages.reduce((a, b) => a.createTime < b.createTime ? a : b);
+        final sessionLast = yearMessages.reduce((a, b) => a.createTime > b.createTime ? a : b);
+
+        if (firstMsg == null || sessionFirst.createTime < firstMsg!.createTime) {
+          firstMsg = sessionFirst;
+          firstUser = session.username;
+        }
+        if (lastMsg == null || sessionLast.createTime > lastMsg!.createTime) {
+          lastMsg = sessionLast;
+          lastUser = session.username;
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+
+    Map<String, dynamic>? msgToMap(Message? m, String? u) {
+      if (m == null || u == null) return null;
+      return {
+        'content': m.isTextMessage ? m.displayContent : '[非文本消息]',
+        'date': DateTime.fromMillisecondsSinceEpoch(m.createTime * 1000).toIso8601String(),
+        'username': u,
+        'displayName': displayNames[u] ?? u,
+        'isSentByMe': m.isSend == 1,
+      };
+    }
+
+    return YearBoundaryStats(
+      firstMessage: msgToMap(firstMsg, firstUser),
+      lastMessage: msgToMap(lastMsg, lastUser),
     );
   }
 }

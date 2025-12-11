@@ -243,6 +243,23 @@ class FirstTimeRecord {
   });
 }
 
+/// 新增代码，为“FirstTimeRecord”添加序列化支持。
+Map<String, dynamic> toJson() => {
+    'keyword': keyword,
+    'time': time.toIso8601String(),
+    'messageContent': messageContent,
+    'isSentByMe': isSentByMe,
+  };
+
+  factory FirstTimeRecord.fromJson(Map<String, dynamic> json) =>
+      FirstTimeRecord(
+        keyword: json['keyword'],
+        time: DateTime.parse(json['time']),
+        messageContent: json['messageContent'],
+        isSentByMe: json['isSentByMe'],
+      );
+}
+
 /// 趣味统计数据
 class FunStats {
   // 笑点报告
@@ -271,6 +288,35 @@ class FunStats {
     this.streakStartDate,
     this.streakEndDate,
   });
+}
+/// 为“趣味统计”添加序列化支持
+Map<String, dynamic> toJson() => {
+    'totalHaha': totalHaha,
+    'longestHaha': longestHaha,
+    'longestHahaText': longestHahaText,
+    'midnightChatKing': midnightChatKing,
+    'midnightMessageCount': midnightMessageCount,
+    'longestStreakFriend': longestStreakFriend,
+    'longestStreakDays': longestStreakDays,
+    'streakStartDate': streakStartDate?.toIso8601String(),
+    'streakEndDate': streakEndDate?.toIso8601String(),
+  };
+
+  factory FunStats.fromJson(Map<String, dynamic> json) => FunStats(
+    totalHaha: json['totalHaha'],
+    longestHaha: json['longestHaha'],
+    longestHahaText: json['longestHahaText'],
+    midnightChatKing: json['midnightChatKing'],
+    midnightMessageCount: json['midnightMessageCount'],
+    longestStreakFriend: json['longestStreakFriend'],
+    longestStreakDays: json['longestStreakDays'],
+    streakStartDate: json['streakStartDate'] != null
+        ? DateTime.parse(json['streakStartDate'])
+        : null,
+    streakEndDate: json['streakEndDate'] != null
+        ? DateTime.parse(json['streakEndDate'])
+        : null,
+  );
 }
 
 /// 语言风格数据
@@ -475,5 +521,72 @@ class MessageLengthData {
             ? DateTime.parse(json['longestMessageTime'])
             : null,
         totalTextMessages: json['totalTextMessages'],
+      );
+}
+
+// ==========================================
+// 以下为本次新增的年度报告数据模型 (Step 1 Added)
+// ==========================================
+
+/// 年度 Emoji 统计
+class EmojiStats {
+  final List<Map<String, dynamic>> topEmojis; // [{'emoji': '😂', 'count': 100}, ...]
+  final String personalityTag; // 例如 "乐天派", "阴阳师"
+
+  EmojiStats({required this.topEmojis, required this.personalityTag});
+
+  Map<String, dynamic> toJson() => {
+    'topEmojis': topEmojis,
+    'personalityTag': personalityTag,
+  };
+
+  factory EmojiStats.fromJson(Map<String, dynamic> json) => EmojiStats(
+    topEmojis: List<Map<String, dynamic>>.from(json['topEmojis']),
+    personalityTag: json['personalityTag'],
+  );
+}
+
+/// 社交能量曲线 (月度统计)
+class SocialBatteryStats {
+  final List<int> monthlyCounts; // 1-12月的消息数列表
+  final int peakMonth; // 最活跃的月份 (1-12)
+  final int lowMonth; // 最安静的月份 (1-12)
+
+  SocialBatteryStats({
+    required this.monthlyCounts,
+    required this.peakMonth,
+    required this.lowMonth,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'monthlyCounts': monthlyCounts,
+    'peakMonth': peakMonth,
+    'lowMonth': lowMonth,
+  };
+
+  factory SocialBatteryStats.fromJson(Map<String, dynamic> json) =>
+      SocialBatteryStats(
+        monthlyCounts: List<int>.from(json['monthlyCounts']),
+        peakMonth: json['peakMonth'],
+        lowMonth: json['lowMonth'],
+      );
+}
+
+/// 首尾消息记录 (敲门人与守夜人)
+class YearBoundaryStats {
+  final Map<String, dynamic>? firstMessage; // {content, date, username, displayName}
+  final Map<String, dynamic>? lastMessage;
+
+  YearBoundaryStats({this.firstMessage, this.lastMessage});
+
+  Map<String, dynamic> toJson() => {
+    'firstMessage': firstMessage,
+    'lastMessage': lastMessage,
+  };
+
+  factory YearBoundaryStats.fromJson(Map<String, dynamic> json) =>
+      YearBoundaryStats(
+        firstMessage: json['firstMessage'],
+        lastMessage: json['lastMessage'],
       );
 }
