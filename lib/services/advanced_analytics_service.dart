@@ -1121,9 +1121,12 @@ class AdvancedAnalyticsService {
 
     if (longestMsg != null) {
       final content = longestMsg['content'] as String;
-      longestContent = content.length > 100
-          ? content.substring(0, 100) + '...'
+     // 修改开始：不再截断 100 字，保留完整内容 (或者限制 5000 字以防万一)
+     // 新代码：保留长文的灵魂！如果实在太长（超过2000字），才做截断保护
+      longestContent = content.length > 2000 
+          ? content.substring(0, 2000) + '... (下文太长已省略)' 
           : content;
+      // 修改结束
       longestMessageTime = DateTime.fromMillisecondsSinceEpoch(
         (longestMsg['createTime'] as int) * 1000,
       );
