@@ -1146,7 +1146,6 @@ class AdvancedAnalyticsService {
       totalTextMessages: textMessageCount,
     );
   }
-}
 
 // ==========================================
   // 以下为本次新增的分析逻辑 (Step 2 Added)
