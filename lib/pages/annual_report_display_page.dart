@@ -13,6 +13,14 @@ import '../widgets/annual_report/animated_components.dart';
 import '../widgets/annual_report/warm_theme.dart';
 import '../widgets/annual_report/warm_decorations.dart';
 import '../widgets/annual_report/elegant_page_transition.dart';
+// ========== 请在此处插入新增的引用 (Step 4) ==========
+import '../widgets/annual_report/laughter_particle_view.dart';
+import '../widgets/annual_report/receipt_ingredient_card.dart';
+import '../widgets/annual_report/blurred_letter_view.dart';
+import '../widgets/annual_report/social_battery_chart.dart';
+import '../widgets/annual_report/emoji_personality_card.dart';
+import '../widgets/annual_report/timeline_boundary_view.dart';
+// ===================================================
 import '../config/annual_report_texts.dart';
 import '../services/database_service.dart';
 import '../services/analytics_background_service.dart';
@@ -386,6 +394,15 @@ class _AnnualReportDisplayPageState extends State<AnnualReportDisplayPage> {
         _buildMidnightKingPage(),
         _buildResponseSpeedPage(),
         _buildFormerFriendsPage(),
+          // ========== 请在此处插入新增的页面构建调用 (Step 4) ==========
+        _buildLaughterPage(), // 1. 快乐源泉
+        _buildIngredientPage(), // 2. 消息成分
+        _buildLongestMessagePage(), // 3. 年度小作文
+        _buildEmojiPage(), // 4. Emoji 人格
+        _buildSocialBatteryPage(), // 5. 社交能量
+        // =========================================================
+        // ========== 请在此处插入新增的页面构建调用 (Step 4) ==========
+        _buildTimelinePage(), // 6. 光阴首尾 (放在曾经的好朋友之后，结束页之前)
         _buildEndingPage(),
       ];
       logger.debug('AnnualReportPage', '页面列表构建完成，共${_pages!.length}页');
@@ -3105,7 +3122,122 @@ class _AnnualReportDisplayPageState extends State<AnnualReportDisplayPage> {
   String _formatDate(DateTime date) {
     return '${date.year}/${date.month}/${date.day}';
   }
+// 以下为本次新增的页面构建方法 (Step 4 Added)
+  // ==========================================
 
+  // 1. 快乐源泉构建器
+  Widget _buildLaughterPage() {
+    final hahaData = _reportData?['hahaReport'] as Map<String, dynamic>?;
+    // 如果没有数据，使用空状态或默认值
+    if (hahaData == null) {
+      return Container(
+        decoration: BoxDecoration(gradient: WarmTheme.getPageGradients()[0]),
+        child: const Center(child: Text('暂无快乐源泉数据')),
+      );
+    }
+    return Container(
+      decoration: const BoxDecoration(
+        // 使用暖色背景
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFFFF3E0), Color(0xFFFFF8E1)], 
+        ),
+      ),
+      child: LaughterParticleView(
+        totalHaha: hahaData['totalHaha'] ?? 0,
+        longestHaha: hahaData['longestHaha'] ?? 0,
+        longestHahaText: hahaData['longestHahaText'] ?? '哈哈',
+      ),
+    );
+  }
+
+  // 2. 消息成分构建器
+  Widget _buildIngredientPage() {
+    final typeList = _reportData?['messageType'] as List?;
+    final total = _reportData?['totalMessages'] as int? ?? 0;
+    
+    if (typeList == null || typeList.isEmpty) {
+      return Container(color: Colors.white);
+    }
+
+    // 将 JSON 数据转回 Model
+    final stats = typeList.map((e) => MessageTypeStats.fromJson(e)).toList();
+
+    return Container(
+      color: const Color(0xFFF5F5F5), // 浅灰背景，突出小票的白
+      child: ReceiptIngredientCard(
+        stats: stats,
+        totalMessages: total,
+      ),
+    );
+  }
+
+  // 3. 年度小作文构建器
+  Widget _buildLongestMessagePage() {
+    final lengthData = _reportData?['messageLength'];
+    if (lengthData == null) return Container(color: Colors.white);
+
+    // 解析数据
+    final content = lengthData['longestContent'] as String? ?? '';
+    final sentTo = lengthData['longestSentToDisplayName'] as String? ?? '某人';
+    final length = lengthData['longestLength'] as int? ?? 0;
+    
+    DateTime? time;
+    if (lengthData['longestMessageTime'] != null) {
+      time = DateTime.tryParse(lengthData['longestMessageTime']);
+    }
+
+    return Container(
+      color: const Color(0xFF2C3E50), // 深色背景，营造深夜氛围
+      child: BlurredLetterView(
+        content: content,
+        sentTo: sentTo,
+        time: time,
+        length: length,
+      ),
+    );
+  }
+
+  // 4. Emoji 人格构建器
+  Widget _buildEmojiPage() {
+    final emojiData = _reportData?['emoji'];
+    if (emojiData == null) return Container(color: Colors.white);
+
+    final stats = EmojiStats.fromJson(emojiData);
+    return EmojiPersonalityCard(stats: stats);
+  }
+
+  // 5. 社交能量构建器
+  Widget _buildSocialBatteryPage() {
+    final batteryData = _reportData?['socialBattery'];
+    if (batteryData == null) return Container(color: Colors.white);
+
+    final stats = SocialBatteryStats.fromJson(batteryData);
+    return Container(
+      color: Colors.white,
+      child: SocialBatteryChart(stats: stats),
+    );
+  }
+
+  // 6. 光阴首尾构建器
+  Widget _buildTimelinePage() {
+    final boundaryData = _reportData?['yearBoundaries'];
+    if (boundaryData == null) return Container(color: Colors.white);
+
+    final stats = YearBoundaryStats.fromJson(boundaryData);
+    // 获取当前年份，如果没有则默认为当前年份
+    final year = widget.year ?? DateTime.now().year;
+
+    return TimelineBoundaryView(
+      stats: stats,
+      year: year,
+    );
+  }
+
+  // ==========================================
+  // 新增代码结束
+  // ==========================================
   // 结束页 - 简约排版，修复溢出
   Widget _buildEndingPage() {
     final yearText = widget.year != null ? '${widget.year}年' : '这段时光';
