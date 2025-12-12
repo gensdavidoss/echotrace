@@ -58,6 +58,10 @@ dependencies:
   # UI 组件
   shimmer: ^3.0.0
   
+  # 新增依赖 (Step 1)
+  confetti: ^0.7.0         # 粒子爆炸/撒花效果
+  animated_text_kit: ^4.2.2 # 文字打字机动画效果
+  
   # XML 解析
   xml: ^6.4.2
   

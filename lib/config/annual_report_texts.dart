@@ -373,3 +373,56 @@ class AnnualReportTexts {
   static const historyText = '这段时光';
   static const historyAllTime = '历史以来';
 }
+
+  // 以下为本次新增的文案配置 (Step 1 Added)
+  // ==========================================
+
+  // ========== 1. 快乐源泉 ==========
+  static const laughterTitle = '快乐源泉';
+  static const laughterSubtitle = '哈哈大笑是生活的解药';
+  static const laughterTotalPrefix = '这一年，你贡献了 ';
+  static const laughterTotalSuffix = ' 个快乐字符';
+  static const laughterLongestPrefix = '最长的一次，你笑了足足 ';
+  static const laughterLongestSuffix = ' 个字\n屏幕都快装不下了！';
+
+  // ========== 2. 消息成分 ==========
+  static const ingredientTitle = '社交成分表';
+  static const ingredientSubtitle = '剥开数据的外壳，看看你的聊天配方';
+  // 成分标签文案
+  static const labelText = '含话量';
+  static const labelImage = '现充值';
+  static const labelVoice = '语音率';
+  static const labelEmoji = '梗图数';
+  static const labelMoney = '氪金度';
+  // 印章文案
+  static const stampMoney = '多财多亿';
+  static const stampVoice = '语音狂魔';
+  static const stampImage = '生活记录员';
+  static const stampEmoji = '斗图王者';
+  static const stampText = '键盘钢琴家';
+
+  // ========== 3. 年度小作文 ==========
+  static const longMsgTitle = '尘封的信件';
+  static const longMsgSubtitle = '有些话，长到需要用勇气去发送';
+  static const longMsgFrom = '发送给 ';
+  static const longMsgLengthPrefix = '全长 ';
+  static const longMsgLengthSuffix = ' 字，是你这一年最长的倾诉';
+  static const longMsgHint = '长按指纹 解锁回忆';
+
+  // ========== 4. 社交能量 ==========
+  static const batteryTitle = '社交能量';
+  static const batterySubtitle = '你的电量，随季节流转';
+  static const batteryPeak = ' 现充爆发期';
+  static const batteryLow = ' 社交枯竭期';
+
+  // ========== 5. Emoji 人格 ==========
+  static const emojiTitle = '年度表情';
+  static const emojiSubtitle = '一个表情，胜过千言万语';
+
+  // ========== 6. 光阴首尾 ==========
+  static const boundaryTitle = '光阴首尾';
+  static const boundarySubtitle = '始于初见，终于陪伴';
+  static const boundaryStart = '2024的第一束光'; // 年份会动态替换，这里是默认
+  static const boundaryEnd = '陪你画上句号';
+  static const boundaryBonus = '始于TA，终于TA';
+}

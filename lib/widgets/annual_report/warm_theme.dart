@@ -31,6 +31,13 @@ class WarmTheme {
   static const Color textSecondary = Color(0xFF666666);
   static const Color textTertiary = Color(0xFF999999);
 
+// ========== 新增 Emoji 人格背景色 (Step 1) ==========
+  static const Color personalityYellow = Color(0xFFFFF9C4); // 快乐星球 - 暖黄
+  static const Color personalityBlue = Color(0xFFCFD8DC);   // 凄惨小苦瓜 - 灰蓝
+  static const Color personalityRed = Color(0xFFFFCCBC);    // 人形炸药包 - 浅红
+  static const Color personalityPurple = Color(0xFFE1BEE7); // 社恐/尴尬 - 浅紫
+  static const Color personalityGreen = Color(0xFFC8E6C9);  // 商务/社交 - 浅绿
+  
   // 页面渐变背景配置
   static List<Gradient> getPageGradients() {
     return [
