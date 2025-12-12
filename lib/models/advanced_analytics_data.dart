@@ -257,7 +257,7 @@ class FirstTimeRecord {
         messageContent: json['messageContent'],
         isSentByMe: json['isSentByMe'],
       );
-
+}
 /// 趣味统计数据
 class FunStats {
   // 笑点报告
