@@ -241,10 +241,9 @@ class FirstTimeRecord {
     required this.messageContent,
     required this.isSentByMe,
   });
-}
 
 /// 新增代码，为“FirstTimeRecord”添加序列化支持。
-Map<String, dynamic> toJson() => {
+  Map<String, dynamic> toJson() => {
     'keyword': keyword,
     'time': time.toIso8601String(),
     'messageContent': messageContent,
@@ -258,7 +257,6 @@ Map<String, dynamic> toJson() => {
         messageContent: json['messageContent'],
         isSentByMe: json['isSentByMe'],
       );
-}
 
 /// 趣味统计数据
 class FunStats {
@@ -288,9 +286,9 @@ class FunStats {
     this.streakStartDate,
     this.streakEndDate,
   });
-}
+
 /// 为“趣味统计”添加序列化支持
-Map<String, dynamic> toJson() => {
+  Map<String, dynamic> toJson() => {
     'totalHaha': totalHaha,
     'longestHaha': longestHaha,
     'longestHahaText': longestHahaText,
@@ -317,7 +315,6 @@ Map<String, dynamic> toJson() => {
         ? DateTime.parse(json['streakEndDate'])
         : null,
   );
-}
 
 /// 语言风格数据
 class LinguisticStyle {

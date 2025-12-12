@@ -372,11 +372,9 @@ class AnnualReportTexts {
   // [显示效果] 历史模式的文案
   static const historyText = '这段时光';
   static const historyAllTime = '历史以来';
-}
 
   // 以下为本次新增的文案配置 (Step 1 Added)
   // ==========================================
-
   // ========== 1. 快乐源泉 ==========
   static const laughterTitle = '快乐源泉';
   static const laughterSubtitle = '哈哈大笑是生活的解药';

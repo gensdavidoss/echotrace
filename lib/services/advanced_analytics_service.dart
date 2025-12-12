@@ -326,8 +326,7 @@ class AdvancedAnalyticsService {
     }
 
     return records;
-  }
-
+  
   /// "哈哈哈"报告
   Future<Map<String, dynamic>> analyzeHahaReport() async {
     final sessions = await _databaseService.getSessions();

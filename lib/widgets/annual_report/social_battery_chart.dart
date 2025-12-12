@@ -125,7 +125,7 @@ class SocialBatteryChart extends StatelessWidget {
                     
                     // 气泡样式
                     touchTooltipData: LineTouchTooltipData(
-                      getTooltipColor: (spot) => Colors.transparent, // 气泡背景透明
+                      tooltipBgColor: Colors.transparent, // 兼容旧版写法
                       tooltipPadding: EdgeInsets.zero,
                       tooltipMargin: 10,
                       getTooltipItems: (touchedSpots) {
