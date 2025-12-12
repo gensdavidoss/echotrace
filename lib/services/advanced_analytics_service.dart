@@ -324,8 +324,8 @@ class AdvancedAnalyticsService {
 
       if (foundKeywords.length == keywords.length) break;
     }
-
     return records;
+  }
   
   /// "哈哈哈"报告
   Future<Map<String, dynamic>> analyzeHahaReport() async {
