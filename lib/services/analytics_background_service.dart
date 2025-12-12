@@ -963,6 +963,28 @@ class AnalyticsBackgroundService {
               break;
             // =================新增代码结束=================
 
+            // ========== 补充缺失的 Case (此处为新增代码) ==========
+            case 'haha':
+              sendLog('开始分析快乐源泉', level: 'debug');
+              // analyzeHahaReport 返回的是 Map，可以直接传递
+              result = await analyticsService.analyzeHahaReport();
+              break;
+
+            case 'messageTypes':
+              sendLog('开始分析消息成分', level: 'debug');
+              final typeStats = await analyticsService.analyzeMessageTypeDistribution();
+              // List<Object> 需要转为 List<Map> 才能跨 Isolate 传输
+              result = typeStats.map((e) => e.toJson()).toList();
+              break;
+
+            case 'messageLength':
+              sendLog('开始分析年度小作文', level: 'debug');
+              final lengthData = await analyticsService.analyzeMessageLength();
+              // Object 需要转为 Map
+              result = lengthData.toJson();
+              break;
+            // ===================================================
+
             default:
               sendLog('未知的分析类型: ${task.analysisType}', level: 'error');
               throw Exception('未知的分析类型: ${task.analysisType}');
