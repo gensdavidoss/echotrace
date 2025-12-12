@@ -315,6 +315,7 @@ class FunStats {
         ? DateTime.parse(json['streakEndDate'])
         : null,
   );
+}
 
 /// 语言风格数据
 class LinguisticStyle {
